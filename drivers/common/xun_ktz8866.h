@@ -230,17 +230,16 @@ static __inline VOID XunKtzSetHwen(_Inout_ XUN_KTZ_BUS *B)
     if (B->Hwen != NULL) {
         ULONG ctl = XunKtzRd(B->Hwen, 0x0);
         ULONG io = XunKtzRd(B->Hwen, 0x4);
-        BOOLEAN needWait = !B->HwenReady || (ctl & (1u << 9)) == 0 || (io & 0x2u) == 0;
         B->HwenBeforeCtl = ctl;
         B->HwenBeforeIo = io;
-        /* Set OUT=1 before OE=1 so HWEN never glitches low and resets KTZ8866. */
-        XunKtzWrMmio(B->Hwen, 0x4, io | 0x2u);
-        XunKtzWrMmio(B->Hwen, 0x0, (1u << 9));
-        B->HwenAfterCtl = XunKtzRd(B->Hwen, 0x0);
-        B->HwenAfterIo = XunKtzRd(B->Hwen, 0x4);
-        if (needWait) {
+        if ((io & 1u) == 0) {
+            /* Only drive GPIO 102 if HWEN is actually low; preserve upper CTL bits (0x1AC0). */
+            XunKtzWrMmio(B->Hwen, 0x4, io | 0x2u);
+            XunKtzWrMmio(B->Hwen, 0x0, (ctl & ~0x3Fu) | (1u << 9));
             XunKtzDelayUs(4500);
         }
+        B->HwenAfterCtl = XunKtzRd(B->Hwen, 0x0);
+        B->HwenAfterIo = XunKtzRd(B->Hwen, 0x4);
         B->HwenReady = TRUE;
     }
 }
