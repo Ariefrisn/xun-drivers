@@ -141,6 +141,9 @@ static VOID GeniConfigPacking(PGENI_SPI Bus)
 static VOID GeniIrqClear(PGENI_SPI Bus)
 {
     MmioWrite32(&Bus->Se, SE_GSI_EVENT_EN, 0);
+    if (MmioRead32(&Bus->Se, SE_GENI_STATUS) & 1u) {
+        GeniCancel(Bus);
+    }
     MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFF);
     MmioWrite32(&Bus->Se, SE_GENI_S_IRQ_CLEAR, 0xFFFFFFFF);
     MmioWrite32(&Bus->Se, SE_DMA_TX_IRQ_CLR, 0xFFFFFFFF);
@@ -242,6 +245,9 @@ NTSTATUS GeniSpiXfer(PGENI_SPI Bus, const UCHAR *Tx, UCHAR *Rx, ULONG Len)
 
     if (Len == 0) {
         return STATUS_SUCCESS;
+    }
+    if (MmioRead32(&Bus->Se, SE_GENI_STATUS) & 1u) {
+        GeniCancel(Bus);
     }
     MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFF);
     MmioWrite32(&Bus->Se, SE_SPI_TRANS_CFG, 0);

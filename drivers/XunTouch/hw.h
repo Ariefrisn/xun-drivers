@@ -102,7 +102,7 @@
 
 #define SPI_OP_TX_ONLY               1u
 #define SPI_OP_RX_ONLY               2u
-#define SPI_OP_TX_RX                 3u
+#define SPI_OP_TX_RX                 7u
 #define M_OPCODE_SHIFT               27
 
 /* 19.2 MHz XO / 3 = 6.4 MHz SPI SCLK (within FT8203 rated SPI frequency) */
