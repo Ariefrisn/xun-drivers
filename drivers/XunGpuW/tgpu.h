@@ -141,11 +141,13 @@ NTSTATUS EngSubmit(const VOID *Cmds, ULONG Bytes, ULONG Fence);   /* any IRQL <=
 VOID     EngKickScanout(VOID);
 
 /* ---- disp.c ---- */
-#define TGPU_FB_PA          0x5C000000ULL      /* UEFI GOP framebuffer, 1200x1920 XRGB8888 */
-#define TGPU_FB_WIDTH       1200
-#define TGPU_FB_HEIGHT      1920
-#define TGPU_FB_PITCH       (TGPU_FB_WIDTH * 4)
+#define TGPU_FB_PA           0x5C000000ULL     /* UEFI GOP framebuffer, 1200x1920 XRGB8888 */
+#define TGPU_FB_WIDTH        1200
+#define TGPU_FB_HEIGHT       1920
+#define TGPU_FB_PITCH        (TGPU_FB_WIDTH * 4)
+#define TGPU_REFRESH_DEFAULT 90
 
+ULONG    DispRefresh(VOID);
 NTSTATUS DispStart(PDXGKRNL_INTERFACE Dxgk);
 VOID     DispSurveyMdp(VOID);
 VOID     DispStop(VOID);

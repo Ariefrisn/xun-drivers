@@ -722,17 +722,25 @@ static NTSTATUS APIENTRY TgDestroyAllocation(const HANDLE hAdapter, const DXGKAR
 static NTSTATUS APIENTRY TgDescribeAllocation(const HANDLE hAdapter, DXGKARG_DESCRIBEALLOCATION *A)
 {
     TGPU_ALLOCATION *al = (TGPU_ALLOCATION *)A->hAllocation;
+    static ULONG count;
 
     UNREFERENCED_PARAMETER(hAdapter);
+    if (al == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
     A->Width = al->Desc.width;
     A->Height = al->Desc.height;
     A->Format = al->Desc.format != 0 ? (D3DDDIFORMAT)al->Desc.format : D3DDDIFMT_X8R8G8B8;
     A->MultisampleMethod.NumSamples = 0;
     A->MultisampleMethod.NumQualityLevels = 0;
-    A->RefreshRate.Numerator = 60;
+    A->RefreshRate.Numerator = DispRefresh();
     A->RefreshRate.Denominator = 1;
     A->PrivateDriverFormatAttribute = 0;
     A->Rotation = D3DDDI_ROTATION_IDENTITY;
+    if (++count <= 16) {
+        LogPrint("DescribeAllocation %p: kind %u %ux%u fmt %u -> %uHz (bo=%p)\n",
+                 al, al->Desc.kind, A->Width, A->Height, A->Format, A->RefreshRate.Numerator, al->Bo);
+    }
     return STATUS_SUCCESS;
 }
 

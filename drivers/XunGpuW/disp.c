@@ -22,7 +22,13 @@ static const GUID g_BrightnessGuid = { 0xFDE5BBA4, 0xB3F9, 0x46FB, { 0xBD, 0xAA,
 #define V_ACTIVE    1920
 #define H_TOTAL     (1200 + 50 + 20 + 36)
 #define V_TOTAL     (1920 + 410 + 6 + 10)
-#define REFRESH     90
+
+static ULONG g_Refresh = TGPU_REFRESH_DEFAULT;
+
+ULONG DispRefresh(VOID)
+{
+    return g_Refresh;
+}
 
 static PDXGKRNL_INTERFACE g_Dxgk;
 static DXGK_DISPLAY_INFORMATION g_Post;
@@ -125,7 +131,7 @@ static BOOLEAN VsyncSync(PVOID Ctx)
    checked the latch once per period, so a flip often took two periods and DWM settled at ~30 FPS. */
 static PEX_TIMER g_HrTimer;
 static LONG64 g_NextVsync;                       /* interrupt time (100 ns) of the next 60 Hz tick */
-#define VSYNC_PERIOD (10000000LL / REFRESH)
+#define VSYNC_PERIOD (10000000LL / g_Refresh)
 
 /* v0.45.1: a WPR trace showed DxgKrnl getting only 31..40 vsyncs/s (intervals 30..35 ms): the "1 ms" timer
    callback arrived every ~15.6 ms, so `now >= g_NextVsync` held on every second callback only. Measure the
@@ -283,7 +289,7 @@ VOID DispVsyncEnable(BOOLEAN Enable)
 NTSTATUS DispGetScanLine(DXGKARG_GETSCANLINE *A)
 {
     LONG64 since = (LONG64)KeQueryInterruptTime() - g_LastVsync;     /* 100 ns */
-    LONG64 frame = 10000000LL / REFRESH;
+    LONG64 frame = 10000000LL / g_Refresh;
     ULONG line;
 
     if (since < 0 || since >= frame) {
@@ -579,6 +585,8 @@ NTSTATUS DispStart(PDXGKRNL_INTERFACE Dxgk)
     }
     g_DispFlip = !DispFileExists(L"\\??\\C:\\xun\\disp.noflip");
     LogPrint("disp panel flip: %s\n", g_DispFlip ? "180 deg" : "disabled (disp.noflip)");
+    g_Refresh = DispFileExists(L"\\??\\C:\\xun\\disp.60hz") ? 60 : TGPU_REFRESH_DEFAULT;
+    LogPrint("disp refresh: %u Hz%s\n", g_Refresh, g_Refresh == 60 ? " (disp.60hz)" : "");
     if (g_Fb == NULL) {
         g_Fb = (PUCHAR)MmMapIoSpaceEx(g_Post.PhysicAddress, (SIZE_T)g_Post.Pitch * g_Post.Height,
                                       PAGE_READWRITE | PAGE_WRITECOMBINE);
@@ -613,7 +621,7 @@ NTSTATUS DispStart(PDXGKRNL_INTERFACE Dxgk)
         KeInitializeTimerEx(&g_VsyncTimer, NotificationTimer);
         KeInitializeDpc(&g_VsyncDpc, VsyncDpc, NULL);
         due.QuadPart = -10000LL * 16;
-        KeSetTimerEx(&g_VsyncTimer, due, 1000 / REFRESH, &g_VsyncDpc);
+        KeSetTimerEx(&g_VsyncTimer, due, 1000 / g_Refresh, &g_VsyncDpc);
         LogPrint("vsync: ExAllocateTimer failed, 16 ms KTIMER\n");
     }
     g_TimerOn = TRUE;
@@ -743,7 +751,7 @@ static VOID BuildEdid(UCHAR *e)
     const ULONG hActive = H_ACTIVE, hFp = 50, hSync = 20, hBp = 36;
     const ULONG vActive = V_ACTIVE, vFp = 410, vSync = 6, vBp = 10;
     const ULONG hBlank = hFp + hSync + hBp, vBlank = vFp + vSync + vBp;
-    const ULONG clk10k = (ULONG)(((ULONGLONG)(hActive + hBlank) * (vActive + vBlank) * REFRESH + 5000ULL) / 10000ULL);
+    const ULONG clk10k = (ULONG)(((ULONGLONG)(hActive + hBlank) * (vActive + vBlank) * g_Refresh + 5000ULL) / 10000ULL);
     const ULONG wMm = 148, hMm = 237;
     UCHAR *d;
     ULONG i, sum = 0;
@@ -817,11 +825,11 @@ static VOID FillSignal(D3DKMDT_VIDEO_SIGNAL_INFO *S)
     S->TotalSize.cy = V_TOTAL;
     S->ActiveSize.cx = H_ACTIVE;
     S->ActiveSize.cy = V_ACTIVE;
-    S->VSyncFreq.Numerator = REFRESH;
+    S->VSyncFreq.Numerator = g_Refresh;
     S->VSyncFreq.Denominator = 1;
-    S->HSyncFreq.Numerator = V_TOTAL * REFRESH;
+    S->HSyncFreq.Numerator = V_TOTAL * g_Refresh;
     S->HSyncFreq.Denominator = 1;
-    S->PixelRate = (SIZE_T)H_TOTAL * V_TOTAL * REFRESH;
+    S->PixelRate = (SIZE_T)H_TOTAL * V_TOTAL * g_Refresh;
     S->ScanLineOrdering = D3DDDI_VSSLO_PROGRESSIVE;
 }
 
