@@ -30,6 +30,7 @@ static PUCHAR g_Fb;                             /* WC mapping of the framebuffer
 static BOOLEAN g_Visible = TRUE;
 static BOOLEAN g_Committed;
 static XUN_QUP_LOCK g_BlQupLock;
+static XUN_KTZ_BUS g_Ktz;
 
 static TGPU_ALLOCATION * volatile g_ScanCur;    /* primary being "scanned out" */
 
@@ -1094,7 +1095,6 @@ NTSTATUS DispCommitVidPn(PDXGKRNL_INTERFACE Dxgk, const DXGKARG_COMMITVIDPN *A)
 #define DSI_INT_CTRL        0x110
 #define DSI_TPG_CTRL        0x15C
 
-static XUN_KTZ_BUS g_Ktz;
 static volatile UCHAR *g_Dsi;
 static PUCHAR g_BlVa;
 static PHYSICAL_ADDRESS g_BlPa;

@@ -71,4 +71,4 @@ index d8c91be..4e20f1a 100644
 -      pDevice->screen->resource_from_handle(pDevice->screen, NULL, &whandle, 0);
     
     if (!pResource->resource) {
-       DebugPrintf("%s: failed\n", __func__);
+       SetError(hDevice, E_OUTOFMEMORY);
