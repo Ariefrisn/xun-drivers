@@ -138,6 +138,8 @@ static VOID GeniConfigPacking(PGENI_SPI Bus)
     MmioWrite32(&Bus->Se, SE_GENI_BYTE_GRAN, bpw / 16);
 }
 
+static VOID GeniCancel(PGENI_SPI Bus);
+
 static VOID GeniIrqClear(PGENI_SPI Bus)
 {
     MmioWrite32(&Bus->Se, SE_GSI_EVENT_EN, 0);
