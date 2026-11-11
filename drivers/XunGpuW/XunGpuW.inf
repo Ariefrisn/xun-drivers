@@ -1,0 +1,72 @@
+;
+; XunGpuW.inf - WDDM driver for the Adreno 610 of Redmi Pad SE (xun, SM6225).
+; Step A (docs/P8_gpu.md): render-only adapter next to XunDisplay; the freedreno UMD
+; talks to it through escapes carrying the Linux msm ioctls. Root-enumerated.
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Display
+ClassGuid   = {4d36e968-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+CatalogFile = XunGpuW.cat
+DriverVer   = ; set by stampinf
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+XunGpuW.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%DeviceDesc% = XunGpuW_Inst, Root\XunGpuW
+; step C: ACPI device GPU0 from our UEFI DSDT (uefi/acpi), with the GPU interrupt (GSIV 209)
+%DeviceDesc% = XunGpuW_Inst, ACPI\TPZG0610
+
+[XunGpuW_Inst]
+FeatureScore = F8
+CopyFiles = XunGpuW_Files
+AddReg = XunGpuW_UmdReg
+
+; Dxgkrnl reads these for every adapter that renders (v0.5 failed start with c0000034 without them).
+; The UMD is Mesa freedreno + d3d10umd (mesa-overlay), installed to System32 as xungpu_d3d10.dll.
+[XunGpuW_UmdReg]
+HKR,,UserModeDriverName,%REG_MULTI_SZ%,xungpu_d3d10.dll,xungpu_d3d10.dll,xungpu_d3d10.dll,xungpu_d3d10.dll
+HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,xungpu_d3d10
+HKR,,VgaCompatible,%REG_DWORD%,0
+
+[XunGpuW_Files]
+XunGpuW.sys
+
+[XunGpuW_Inst.Services]
+AddService = XunGpuW, 0x00000002, XunGpuW_Service, XunGpuW_EventLog
+
+[XunGpuW_Service]
+DisplayName   = %ServiceName%
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 0               ; SERVICE_ERROR_IGNORE
+ServiceBinary = %12%\XunGpuW.sys
+
+[XunGpuW_EventLog]
+AddReg = XunGpuW_EventLog_AddReg
+
+[XunGpuW_EventLog_AddReg]
+HKR,,EventMessageFile,0x00020000,"%%SystemRoot%%\System32\IoLogMsg.dll"
+HKR,,TypesSupported,0x00010001,7
+
+[Strings]
+REG_MULTI_SZ     = 0x00010000
+REG_DWORD        = 0x00010001
+ProviderName     = "xun-woa"
+ManufacturerName = "xun-woa"
+DiskName         = "XunGpuW Installation Disk"
+DeviceDesc       = "Qualcomm Adreno 610 (xun-woa)"
+ServiceName      = "XunGpuW"

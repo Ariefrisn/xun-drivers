@@ -1,0 +1,57 @@
+;
+; XunModem.inf - modem DSP (MPSS) + WLAN firmware bring-up for Redmi Pad SE (xun, SM6225)
+; Root-enumerated KMDF driver: TrustZone PAS boot, SMP2P, GLINK/QRTR, pd-mapper/tftp/rmtfs, WLFW.
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+CatalogFile = XunModem.cat
+DriverVer   = ; set by stampinf
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+XunModem.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%DeviceDesc% = XunModem_Device, Root\XunModem
+
+[XunModem_Device.NT]
+CopyFiles = XunModem_CopyFiles
+
+[XunModem_CopyFiles]
+XunModem.sys
+
+[XunModem_Device.NT.Services]
+AddService = XunModem, 0x00000002, XunModem_Service
+
+[XunModem_Service]
+DisplayName   = %ServiceName%
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\XunModem.sys
+
+[XunModem_Device.NT.Wdf]
+KmdfService = XunModem, XunModem_WdfSection
+
+[XunModem_WdfSection]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+ProviderName     = "xun-woa"
+ManufacturerName = "xun-woa"
+DiskName         = "XunModem Installation Disk"
+DeviceDesc       = "Modem DSP and WLAN firmware (Redmi Pad SE)"
+ServiceName      = "XunModem"

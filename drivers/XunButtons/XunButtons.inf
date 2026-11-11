@@ -1,0 +1,63 @@
+;
+; XunButtons.inf - Power, Vol+/-, and Hall lid switch of Redmi Pad SE (xun, SM6225)
+; Root-enumerated KMDF source driver, exposes HID power/sleep and volume keys through VHF.
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+CatalogFile = XunButtons.cat
+DriverVer   = ; set by stampinf
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+XunButtons.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%DeviceDesc% = XunButtons_Device, Root\XunButtons
+
+[XunButtons_Device.NT]
+CopyFiles = XunButtons_CopyFiles
+
+[XunButtons_CopyFiles]
+XunButtons.sys
+
+[XunButtons_Device.NT.HW]
+AddReg = XunButtons_HwAddReg
+
+[XunButtons_HwAddReg]
+HKR,,"LowerFilters",0x00010000,"vhf"
+
+[XunButtons_Device.NT.Services]
+AddService = XunButtons, 0x00000002, XunButtons_Service
+
+[XunButtons_Service]
+DisplayName   = %ServiceName%
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\XunButtons.sys
+
+[XunButtons_Device.NT.Wdf]
+KmdfService = XunButtons, XunButtons_WdfSection
+
+[XunButtons_WdfSection]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+ProviderName     = "xun-woa"
+ManufacturerName = "xun-woa"
+DiskName         = "XunButtons Installation Disk"
+DeviceDesc       = "Power and Volume Buttons (Redmi Pad SE)"
+ServiceName      = "XunButtons"

@@ -1,0 +1,66 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XunDisplay", "drivers\XunDisplay\XunDisplay.vcxproj", "{99CF4A28-326A-4F2D-87D4-425DD619E557}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XunTouch", "drivers\XunTouch\XunTouch.vcxproj", "{FE47D89F-AE75-40EA-AA16-2F6EA0FE88EA}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XunBattery", "drivers\XunBattery\XunBattery.vcxproj", "{170E07EC-CEBB-4032-9254-49AE54786597}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XunButtons", "drivers\XunButtons\XunButtons.vcxproj", "{96B4A45D-A815-4A1A-B40A-72BFDC5D21FB}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XunBacklight", "drivers\XunBacklight\XunBacklight.vcxproj", "{1819F389-B2FA-430E-A5CD-DEE185EDA06B}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XunCpu", "drivers\XunCpu\XunCpu.vcxproj", "{118EA846-F2F4-488C-8966-68BEE3637A66}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XunRpm", "drivers\XunRpm\XunRpm.vcxproj", "{FFBCA5F0-CFE8-458F-85EB-3486B32A0B02}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XunGpu", "drivers\XunGpu\XunGpu.vcxproj", "{4225D7A3-417A-471D-8354-9B46C89988E5}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XunGpuW", "drivers\XunGpuW\XunGpuW.vcxproj", "{4267463E-27EE-4751-8FB9-CF634617B93B}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XunModem", "drivers\XunModem\XunModem.vcxproj", "{35D47649-AD77-478C-8B17-19938C09AB53}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XunWifi", "drivers\XunWifi\XunWifi.vcxproj", "{68673C5C-24C7-483F-ADC4-BCCA82B9EBFF}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XunAudio", "drivers\XunAudio\XunAudio.vcxproj", "{4222F1E1-8135-48B5-837E-BCE75AA6224D}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XunSpeaker", "drivers\XunSpeaker\XunSpeaker.vcxproj", "{123F7F94-40BE-41D9-ABB6-BBA8409655E2}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Release|ARM64 = Release|ARM64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{99CF4A28-326A-4F2D-87D4-425DD619E557}.Release|ARM64.ActiveCfg = Release|ARM64
+		{99CF4A28-326A-4F2D-87D4-425DD619E557}.Release|ARM64.Build.0 = Release|ARM64
+		{FE47D89F-AE75-40EA-AA16-2F6EA0FE88EA}.Release|ARM64.ActiveCfg = Release|ARM64
+		{FE47D89F-AE75-40EA-AA16-2F6EA0FE88EA}.Release|ARM64.Build.0 = Release|ARM64
+		{170E07EC-CEBB-4032-9254-49AE54786597}.Release|ARM64.ActiveCfg = Release|ARM64
+		{170E07EC-CEBB-4032-9254-49AE54786597}.Release|ARM64.Build.0 = Release|ARM64
+		{96B4A45D-A815-4A1A-B40A-72BFDC5D21FB}.Release|ARM64.ActiveCfg = Release|ARM64
+		{96B4A45D-A815-4A1A-B40A-72BFDC5D21FB}.Release|ARM64.Build.0 = Release|ARM64
+		{1819F389-B2FA-430E-A5CD-DEE185EDA06B}.Release|ARM64.ActiveCfg = Release|ARM64
+		{1819F389-B2FA-430E-A5CD-DEE185EDA06B}.Release|ARM64.Build.0 = Release|ARM64
+		{118EA846-F2F4-488C-8966-68BEE3637A66}.Release|ARM64.ActiveCfg = Release|ARM64
+		{118EA846-F2F4-488C-8966-68BEE3637A66}.Release|ARM64.Build.0 = Release|ARM64
+		{FFBCA5F0-CFE8-458F-85EB-3486B32A0B02}.Release|ARM64.ActiveCfg = Release|ARM64
+		{FFBCA5F0-CFE8-458F-85EB-3486B32A0B02}.Release|ARM64.Build.0 = Release|ARM64
+		{4225D7A3-417A-471D-8354-9B46C89988E5}.Release|ARM64.ActiveCfg = Release|ARM64
+		{4225D7A3-417A-471D-8354-9B46C89988E5}.Release|ARM64.Build.0 = Release|ARM64
+		{4267463E-27EE-4751-8FB9-CF634617B93B}.Release|ARM64.ActiveCfg = Release|ARM64
+		{4267463E-27EE-4751-8FB9-CF634617B93B}.Release|ARM64.Build.0 = Release|ARM64
+		{35D47649-AD77-478C-8B17-19938C09AB53}.Release|ARM64.ActiveCfg = Release|ARM64
+		{35D47649-AD77-478C-8B17-19938C09AB53}.Release|ARM64.Build.0 = Release|ARM64
+		{68673C5C-24C7-483F-ADC4-BCCA82B9EBFF}.Release|ARM64.ActiveCfg = Release|ARM64
+		{68673C5C-24C7-483F-ADC4-BCCA82B9EBFF}.Release|ARM64.Build.0 = Release|ARM64
+		{4222F1E1-8135-48B5-837E-BCE75AA6224D}.Release|ARM64.ActiveCfg = Release|ARM64
+		{4222F1E1-8135-48B5-837E-BCE75AA6224D}.Release|ARM64.Build.0 = Release|ARM64
+		{123F7F94-40BE-41D9-ABB6-BBA8409655E2}.Release|ARM64.ActiveCfg = Release|ARM64
+		{123F7F94-40BE-41D9-ABB6-BBA8409655E2}.Release|ARM64.Build.0 = Release|ARM64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

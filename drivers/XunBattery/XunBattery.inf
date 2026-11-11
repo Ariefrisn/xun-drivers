@@ -1,0 +1,59 @@
+;
+; XunBattery.inf - battery for Redmi Pad SE (xun, SM6225): sh366101 fuel gauge (SE2) + sc89890h/bq2589x charger (SE1)
+; Root-enumerated KMDF battery miniclass (battc.sys).
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Battery
+ClassGuid   = {72631e54-78a4-11d0-bcf7-00aa00b7b32a}
+Provider    = %ProviderName%
+CatalogFile = XunBattery.cat
+DriverVer   = ; set by stampinf
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+XunBattery.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%DeviceDesc% = XunBattery_Device, Root\XunBattery
+
+[XunBattery_Device.NT]
+CopyFiles = XunBattery_CopyFiles
+Include   = battery.inf
+Needs     = Battery_Inst
+
+[XunBattery_CopyFiles]
+XunBattery.sys
+
+[XunBattery_Device.NT.Services]
+AddService = XunBattery, 0x00000002, XunBattery_Service
+
+[XunBattery_Service]
+DisplayName   = %ServiceName%
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\XunBattery.sys
+
+[XunBattery_Device.NT.Wdf]
+KmdfService = XunBattery, XunBattery_WdfSection
+
+[XunBattery_WdfSection]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+ProviderName     = "xun-woa"
+ManufacturerName = "xun-woa"
+DiskName         = "XunBattery Installation Disk"
+DeviceDesc       = "Redmi Pad SE Battery (sh366101 + sc89890h)"
+ServiceName      = "XunBattery"

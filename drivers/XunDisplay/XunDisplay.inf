@@ -1,0 +1,62 @@
+;
+; XunDisplay.inf - display-only WDDM driver for Redmi Pad SE (xun) on the UEFI
+; framebuffer (0x5C000000, 1200x1920). Based on the Microsoft KMDOD sample (MS-PL).
+; Root-enumerated; takes the POST framebuffer over from BasicDisplay through
+; DxgkCbAcquirePostDisplayOwnership (if that fails the driver does not start and
+; BasicDisplay keeps the screen).
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Display
+ClassGuid   = {4d36e968-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+CatalogFile = XunDisplay.cat
+DriverVer   = ; set by stampinf
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+XunDisplay.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%DeviceDesc% = XunDisplay_Inst, Root\XunDisplay
+
+[XunDisplay_Inst]
+FeatureScore = F9
+CopyFiles = XunDisplay_Files
+
+[XunDisplay_Files]
+XunDisplay.sys
+
+[XunDisplay_Inst.Services]
+AddService = XunDisplay, 0x00000002, XunDisplay_Service, XunDisplay_EventLog
+
+[XunDisplay_Service]
+DisplayName   = %ServiceName%
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 0               ; SERVICE_ERROR_IGNORE
+ServiceBinary = %12%\XunDisplay.sys
+
+[XunDisplay_EventLog]
+AddReg = XunDisplay_EventLog_AddReg
+
+[XunDisplay_EventLog_AddReg]
+HKR,,EventMessageFile,0x00020000,"%%SystemRoot%%\System32\IoLogMsg.dll"
+HKR,,TypesSupported,0x00010001,7
+
+[Strings]
+ProviderName     = "xun-woa"
+ManufacturerName = "xun-woa"
+DiskName         = "XunDisplay Installation Disk"
+DeviceDesc       = "Redmi Pad SE Display (xun)"
+ServiceName      = "XunDisplay"

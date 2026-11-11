@@ -1,0 +1,951 @@
+diff --git a/src/gallium/auxiliary/nir/tgsi_to_nir.c b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+index 2a97506..78eac1c 100644
+--- a/src/gallium/auxiliary/nir/tgsi_to_nir.c
++++ b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+@@ -69,6 +69,7 @@ struct ttn_compile {
+ 
+    unsigned num_samp_types;
+    nir_alu_type *samp_types;
++   unsigned *sview_targets;   /* XunGpu: TGSI_TEXTURE_* of each SVIEW declaration (SM4 sample ops) */
+ 
+    nir_def *addr_reg;
+ 
+@@ -264,6 +265,7 @@ ttn_emit_declaration(struct ttn_compile *c)
+ 
+       for (i = 0; i < array_size; i++) {
+          c->samp_types[decl->Range.First + i] = type;
++         c->sview_targets[decl->Range.First + i] = sview->Resource;
+       }
+    } else {
+       bool is_array = (array_size > 1);
+@@ -812,6 +814,7 @@ ttn_get_src(struct ttn_compile *c, struct tgsi_full_src_register *tgsi_fsrc,
+    if (tgsi_src->File == TGSI_FILE_NULL) {
+       return nir_imm_float(b, 0.0);
+    } else if (tgsi_src->File == TGSI_FILE_SAMPLER ||
++              tgsi_src->File == TGSI_FILE_SAMPLER_VIEW ||   /* XunGpu: SM4 sample ops */
+               tgsi_src->File == TGSI_FILE_IMAGE ||
+               tgsi_src->File == TGSI_FILE_BUFFER) {
+       /* Only the index of the resource gets used in texturing, and it will
+@@ -1426,6 +1429,118 @@ ttn_tex(struct ttn_compile *c, nir_def **src)
+    return nir_pad_vector_imm_int(b, &instr->def, 0, 4);
+ }
+ 
++/* XunGpu: the SM4 sample opcodes d3d10umd emits (SAMPLE, _B, _L, _C, _C_LZ, _D, _I): explicit SVIEW
++ * (src[1]) and SAMPLER (src[2]) registers, texture target from the SVIEW declaration. The tex
++ * instruction carries texture_index/sampler_index directly (no derefs). */
++static nir_def *
++ttn_sample(struct ttn_compile *c, nir_def **src)
++{
++   nir_builder *b = &c->build;
++   struct tgsi_full_instruction *ti = &c->token->FullInstruction;
++   unsigned opc = ti->Instruction.Opcode;
++   unsigned sview = ti->Src[1].Register.Index;
++   unsigned samp = opc == TGSI_OPCODE_SAMPLE_I ? 0 : ti->Src[2].Register.Index;
++   unsigned target = sview < c->num_samp_types ? c->sview_targets[sview] : TGSI_TEXTURE_2D;
++   nir_alu_type stype = sview < c->num_samp_types ? c->samp_types[sview] : nir_type_float32;
++   nir_tex_instr *instr;
++   unsigned n = 0, num_srcs = 1, i;
++   nir_texop op;
++   bool shadow = false;
++
++   switch (opc) {
++   case TGSI_OPCODE_SAMPLE:      op = nir_texop_tex; break;
++   case TGSI_OPCODE_SAMPLE_B:    op = nir_texop_txb; num_srcs++; break;
++   case TGSI_OPCODE_SAMPLE_L:    op = nir_texop_txl; num_srcs++; break;
++   case TGSI_OPCODE_SAMPLE_C:    op = nir_texop_tex; num_srcs++; shadow = true; break;
++   case TGSI_OPCODE_SAMPLE_C_LZ: op = nir_texop_txl; num_srcs += 2; shadow = true; break;
++   case TGSI_OPCODE_SAMPLE_D:    op = nir_texop_txd; num_srcs += 2; break;
++   case TGSI_OPCODE_SAMPLE_I:
++   default:
++      op = target == TGSI_TEXTURE_2D_MSAA || target == TGSI_TEXTURE_2D_ARRAY_MSAA ? nir_texop_txf_ms : nir_texop_txf;
++      if (target != TGSI_TEXTURE_BUFFER)
++         num_srcs++;                           /* lod / sample index */
++      break;
++   }
++   if (b->shader->info.stage != MESA_SHADER_FRAGMENT && op == nir_texop_tex) {
++      op = nir_texop_txl;                      /* no implicit derivatives outside the FS */
++      num_srcs++;
++   }
++   num_srcs += ti->Texture.NumOffsets;
++
++   instr = nir_tex_instr_create(b->shader, num_srcs);
++   instr->op = op;
++   get_texture_info(target, &instr->sampler_dim, &instr->is_shadow, &instr->is_array);
++   instr->is_shadow = shadow;
++   instr->coord_components = glsl_get_sampler_dim_coordinate_components(instr->sampler_dim);
++   if (instr->is_array)
++      instr->coord_components++;
++   instr->texture_index = sview;
++   instr->sampler_index = samp;
++   instr->dest_type = stype;
++
++   /* declare the texture for shader_info (textures_used, num_textures) */
++   get_sampler_var(c, sview, instr->sampler_dim, false, instr->is_array, base_type_for_alu_type(stype), op);
++   if (op != nir_texop_txf && op != nir_texop_txf_ms) {
++      BITSET_SET(b->shader->info.samplers_used, samp);
++      c->num_samplers = MAX2(c->num_samplers, samp + 1);
++   }
++
++   instr->src[n++] = nir_tex_src_for_ssa(nir_tex_src_coord, nir_trim_vector(b, src[0], instr->coord_components));
++   switch (opc) {
++   case TGSI_OPCODE_SAMPLE_B:
++      instr->src[n++] = nir_tex_src_for_ssa(nir_tex_src_bias, ttn_channel(b, src[3], X));
++      break;
++   case TGSI_OPCODE_SAMPLE_L:
++      instr->src[n++] = nir_tex_src_for_ssa(nir_tex_src_lod, ttn_channel(b, src[3], X));
++      break;
++   case TGSI_OPCODE_SAMPLE_C:
++      instr->src[n++] = nir_tex_src_for_ssa(nir_tex_src_comparator, ttn_channel(b, src[3], X));
++      break;
++   case TGSI_OPCODE_SAMPLE_C_LZ:
++      instr->src[n++] = nir_tex_src_for_ssa(nir_tex_src_comparator, ttn_channel(b, src[3], X));
++      instr->src[n++] = nir_tex_src_for_ssa(nir_tex_src_lod, nir_imm_float(b, 0.0));
++      break;
++   case TGSI_OPCODE_SAMPLE_D:
++      instr->src[n] = nir_tex_src_for_ssa(nir_tex_src_ddx, nir_trim_vector(b, src[3], instr->coord_components - instr->is_array));
++      n++;
++      instr->src[n] = nir_tex_src_for_ssa(nir_tex_src_ddy, nir_trim_vector(b, src[4], instr->coord_components - instr->is_array));
++      n++;
++      break;
++   case TGSI_OPCODE_SAMPLE_I:
++      if (target != TGSI_TEXTURE_BUFFER) {
++         if (op == nir_texop_txf_ms)
++            instr->src[n++] = nir_tex_src_for_ssa(nir_tex_src_ms_index, ttn_channel(b, src[0], W));
++         else
++            instr->src[n++] = nir_tex_src_for_ssa(nir_tex_src_lod, ttn_channel(b, src[0], W));
++      }
++      break;
++   default:
++      break;
++   }
++   if (n < num_srcs - ti->Texture.NumOffsets && (op == nir_texop_txl) &&
++       opc != TGSI_OPCODE_SAMPLE_L && opc != TGSI_OPCODE_SAMPLE_C_LZ) {
++      instr->src[n++] = nir_tex_src_for_ssa(nir_tex_src_lod, nir_imm_float(b, 0.0));
++   }
++   for (i = 0; i < ti->Texture.NumOffsets; i++) {
++      struct tgsi_texture_offset *to = &ti->TexOffsets[i];
++      nir_alu_src asrc;
++      memset(&asrc, 0, sizeof(asrc));
++      asrc.src = ttn_src_for_file_and_index(c, to->File, to->Index, NULL, NULL, NULL, true);
++      asrc.swizzle[0] = to->SwizzleX;
++      asrc.swizzle[1] = to->SwizzleY;
++      asrc.swizzle[2] = to->SwizzleZ;
++      asrc.swizzle[3] = TGSI_SWIZZLE_W;
++      instr->src[n] = nir_tex_src_for_ssa(nir_tex_src_offset, nir_mov_alu(b, asrc, nir_tex_instr_src_size(instr, n)));
++      n++;
++   }
++   assert(n == num_srcs);
++   instr->num_srcs = n;
++
++   nir_def_init(&instr->instr, &instr->def, nir_tex_instr_dest_size(instr), 32);
++   nir_builder_instr_insert(b, &instr->instr);
++   return nir_pad_vector_imm_int(b, &instr->def, 0, 4);
++}
++
+ /* TGSI_OPCODE_TXQ is actually two distinct operations:
+  *
+  *     dst.x = texture\_width(unit, lod)
+@@ -1978,6 +2093,16 @@ ttn_emit_instruction(struct ttn_compile *c)
+       dst = ttn_tex(c, src);
+       break;
+ 
++   case TGSI_OPCODE_SAMPLE:
++   case TGSI_OPCODE_SAMPLE_B:
++   case TGSI_OPCODE_SAMPLE_L:
++   case TGSI_OPCODE_SAMPLE_C:
++   case TGSI_OPCODE_SAMPLE_C_LZ:
++   case TGSI_OPCODE_SAMPLE_D:
++   case TGSI_OPCODE_SAMPLE_I:
++      dst = ttn_sample(c, src);   /* XunGpu */
++      break;
++
+    case TGSI_OPCODE_TXQ:
+       dst = ttn_txq(c, src);
+       break;
+@@ -2038,9 +2163,10 @@ ttn_emit_instruction(struct ttn_compile *c)
+       if (op_trans[tgsi_op] != 0 || tgsi_op == TGSI_OPCODE_MOV) {
+          dst = ttn_alu(b, op_trans[tgsi_op], dst_bitsize, src);
+       } else {
+-         fprintf(stderr, "unknown TGSI opcode: %s\n",
++         /* XunGpu: a wrong value beats killing DWM; the opcode shows up in the debug log */
++         fprintf(stderr, "unknown TGSI opcode: %s (result 0)\n",
+                  tgsi_get_opcode_name(tgsi_op));
+-         abort();
++         dst = nir_imm_vec4(b, 0.0, 0.0, 0.0, 0.0);
+       }
+       break;
+    }
+@@ -2364,6 +2490,7 @@ ttn_compile_init(const void *tgsi_tokens,
+ 
+    c->num_samp_types = scan.file_max[TGSI_FILE_SAMPLER_VIEW] + 1;
+    c->samp_types = rzalloc_array(c, nir_alu_type, c->num_samp_types);
++   c->sview_targets = rzalloc_array(c, unsigned, c->num_samp_types);
+ 
+    ttn_parse_tgsi(c, tgsi_tokens);
+    ttn_add_output_stores(c);
+diff --git a/src/gallium/drivers/freedreno/freedreno_resource.c b/src/gallium/drivers/freedreno/freedreno_resource.c
+index 68735df..d3abf54 100644
+--- a/src/gallium/drivers/freedreno/freedreno_resource.c
++++ b/src/gallium/drivers/freedreno/freedreno_resource.c
+@@ -1799,3 +1799,47 @@ fd_resource_context_init(struct pipe_context *pctx)
+    pctx->invalidate_resource = fd_invalidate_resource;
+    pctx->get_sample_position = u_default_get_sample_position;
+ }
++
++/* XunGpu (d3d10umd on Windows): DXGI RotateResourceIdentities. The swapchain buffers keep their
++ * pipe_resource objects (render target / shader resource views point at them) and only their storage
++ * rotates: prscs[i] takes the storage of prscs[i + 1], the last one takes prscs[0]'s. Rotating the
++ * pipe_resource pointers instead (as d3d10umd did) left DWM rendering into a buffer other than the one
++ * it presented: stale animation frames stayed on screen. Same steps as the shadow-buffer swap above;
++ * the caller flushed the context. */
++void
++fd_resource_rotate_storage(struct pipe_context *pctx, struct pipe_resource **prscs, unsigned n)
++{
++   struct fd_context *ctx = fd_context(pctx);
++   struct fd_resource *first;
++   struct fd_bo *bo0;
++   struct fdl_layout layout0;
++   bool valid0;
++
++   if (n < 2)
++      return;
++   for (unsigned i = 0; i < n; i++) {
++      fd_bc_invalidate_resource(fd_resource(prscs[i]), false);
++      rebind_resource(fd_resource(prscs[i]));
++   }
++
++   fd_screen_lock(ctx->screen);
++   first = fd_resource(prscs[0]);
++   bo0 = first->bo;
++   valid0 = first->valid;
++   layout0 = first->layout;
++   for (unsigned i = 0; i + 1 < n; i++) {
++      struct fd_resource *a = fd_resource(prscs[i]), *b = fd_resource(prscs[i + 1]);
++      a->bo = b->bo;
++      a->valid = b->valid;
++      a->layout = b->layout;
++      a->seqno = seqno_next_u16(&ctx->screen->rsc_seqno);
++   }
++   {
++      struct fd_resource *last = fd_resource(prscs[n - 1]);
++      last->bo = bo0;
++      last->valid = valid0;
++      last->layout = layout0;
++      last->seqno = seqno_next_u16(&ctx->screen->rsc_seqno);
++   }
++   fd_screen_unlock(ctx->screen);
++}
+diff --git a/src/gallium/frontends/d3d10umd/Adapter.cpp b/src/gallium/frontends/d3d10umd/Adapter.cpp
+index 837013e..2e6c5d7 100644
+--- a/src/gallium/frontends/d3d10umd/Adapter.cpp
++++ b/src/gallium/frontends/d3d10umd/Adapter.cpp
+@@ -106,7 +106,7 @@ OpenAdapter10(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
+ 
+    /* XunGpu: opt-in only while the driver is experimental. Our adapter is DXGI adapter 0, so
+     * without this explorer/DWM render on it and a GPU hang freezes the desktop. */
+-   if (GetEnvironmentVariableA("XUNGPU_ENABLE", NULL, 0) == 0) {
++   if (!XunWddmEnabled()) {
+       return E_FAIL;
+    }
+ 
+@@ -231,7 +231,7 @@ OpenAdapter10_2(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
+ 
+    /* XunGpu: opt-in only while the driver is experimental. Our adapter is DXGI adapter 0, so
+     * without this explorer/DWM render on it and a GPU hang freezes the desktop. */
+-   if (GetEnvironmentVariableA("XUNGPU_ENABLE", NULL, 0) == 0) {
++   if (!XunWddmEnabled()) {
+       return E_FAIL;
+    }
+ 
+diff --git a/src/gallium/frontends/d3d10umd/Debug.cpp b/src/gallium/frontends/d3d10umd/Debug.cpp
+index 17f7292..473dc95 100644
+--- a/src/gallium/frontends/d3d10umd/Debug.cpp
++++ b/src/gallium/frontends/d3d10umd/Debug.cpp
+@@ -3,6 +3,8 @@
+ #include <stdarg.h>
+ #include <stdio.h>
+ 
++extern "C" void XunWddmLog(const char *text);   /* XunGpu, xun_wddm.cpp */
++
+ 
+ #if MESA_DEBUG
+ 
+@@ -34,6 +36,7 @@ DebugPrintf(const char *format, ...)
+     va_end(ap);
+ 
+     OutputDebugStringA(buf);
++    XunWddmLog(buf);   /* XunGpu */
+ }
+ 
+ 
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index 8bb09ba..fd61721 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -44,6 +44,8 @@
+ 
+ #include "Debug.h"
+ 
++extern "C" void fd_wddm_detach(void *ctx);   /* XunGpu: freedreno/drm/wddm/fd_wddm.c */
++
+ #include "util/u_sampler.h"
+ 
+ #include "gdikmt/gdikmt.h"
+@@ -370,14 +372,15 @@ DestroyDevice(D3D10DDI_HDEVICE hDevice)   // IN
+    static struct pipe_sampler_view * sampler_views[PIPE_MAX_SHADER_SAMPLER_VIEWS];
+    memset(sampler_views, 0, sizeof sampler_views);
+    pipe->set_sampler_views(pipe, PIPE_SHADER_FRAGMENT, 0,
+-                           PIPE_MAX_SHADER_SAMPLER_VIEWS, 0, false, sampler_views);
++                           PIPE_MAX_SAMPLERS, 0, false, sampler_views);   /* XunGpu */
+    pipe->set_sampler_views(pipe, PIPE_SHADER_VERTEX, 0,
+-                           PIPE_MAX_SHADER_SAMPLER_VIEWS, 0, false, sampler_views);
++                           PIPE_MAX_SAMPLERS, 0, false, sampler_views);   /* XunGpu */
+    pipe->set_sampler_views(pipe, PIPE_SHADER_GEOMETRY, 0,
+-                           PIPE_MAX_SHADER_SAMPLER_VIEWS, 0, false, sampler_views);
++                           PIPE_MAX_SAMPLERS, 0, false, sampler_views);   /* XunGpu */
+ 
+    pipe->destroy(pipe);
+    pDevice->screen->destroy(pDevice->screen);
++   fd_wddm_detach(&pDevice->device.base);   /* XunGpu: its escape context dies with the device */
+ 
+    mtx_destroy(&pDevice->CreateResourceMtx);
+ }
+diff --git a/src/gallium/frontends/d3d10umd/DxgiFns.cpp b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+index 53ef690..d6dd16d 100644
+--- a/src/gallium/frontends/d3d10umd/DxgiFns.cpp
++++ b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+@@ -42,6 +42,8 @@
+ 
+ #include "Debug.h"
+ 
++extern "C" void fd_resource_rotate_storage(struct pipe_context *pctx, struct pipe_resource **prscs, unsigned n);
++
+ #include "frontend/winsys_handle.h"
+ #include "pipe/p_defines.h"
+ #include "pipe/p_state.h"
+@@ -66,6 +68,16 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+    struct Device *device = CastDevice(pPresentData->hDevice);
+    Resource *pSrcResource = CastResource(pPresentData->hSurfaceToPresent);
+ 
++   if (pSrcResource->hAllocation) {
++      Resource *pDst = pPresentData->hDstResource ? CastResource(pPresentData->hDstResource) : NULL;
++      HRESULT hr = XunWddmPresent(device, pSrcResource, pDst, pPresentData->pDXGIContext);
++      static unsigned n;
++      if (++n <= 60 || FAILED(hr))
++         XunWddmLogf("DXGI Present #%u res %p alloc 0x%x dst %p flags 0x%x -> 0x%08lx\n", n, pSrcResource->resource,
++                       pSrcResource->hAllocation, pPresentData->hDstResource, pPresentData->Flags.Value, (unsigned long)hr);
++      return hr;
++   }
++   XunWddmLogf("DXGI Present of a resource without allocation (flush_frontbuffer path)\n");
+    device->pipe->screen->flush_frontbuffer(device->pipe->screen, device->pipe, 
+       pSrcResource->resource, 0, 0, pPresentData->pDXGIContext, 0, NULL);
+ 
+@@ -123,6 +135,13 @@ _SetDisplayMode( DXGI_DDI_ARG_SETDISPLAYMODE *SetDisplayMode )
+    Device* device = CastDevice(SetDisplayMode->hDevice);
+    Resource *res = CastResource(SetDisplayMode->hResource);
+ 
++   if (res->hAllocation) {
++      HRESULT hr = device->device.base.setDisplayMode(&device->device.base, res->hAllocation);
++      XunWddmLogf("DXGI SetDisplayMode alloc 0x%x -> 0x%08lx\n", res->hAllocation, (unsigned long)hr);
++      return hr;
++   }
++   XunWddmLogf("DXGI SetDisplayMode without allocation\n");
++
+    if(!device->screen->resource_get_handle) {
+       LOG_UNSUPPORTED_ENTRYPOINT();
+       return S_OK;
+@@ -197,22 +216,52 @@ _RotateResourceIdentities(DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *RotateResourc
+ {
+    LOG_ENTRYPOINT();
+ 
++   XunWddmLogf("DXGI RotateResourceIdentities %u\n", RotateResourceIdentities->Resources);
+    if (RotateResourceIdentities->Resources <= 1) {
+       return S_OK;
+    }
+    UINT NumResources = RotateResourceIdentities->Resources;
+    const DXGI_DDI_HRESOURCE *hResources = RotateResourceIdentities->pResources;
+ 
+-   struct pipe_resource *firstResource = CastPipeResource(hResources[0]);
++   /* XunGpu experiment (umd.env XUN_NOROTATE=1): no rotation - DWM renders into and flips the same
++    * buffer, which then always holds the previous frame (DWM redraws only dirty regions) */
++   if (getenv("XUN_NOROTATE"))
++      return S_OK;
+ 
+-   for (UINT i = 0; i < (NumResources - 1); ++i) {
+-      Resource* resource = CastResource(hResources[i]);
+-      resource->resource = CastPipeResource(hResources[i + 1]);
++   /* XunGpu: rotate the storage (freedreno BOs), not the pipe_resource objects: views keep pointing
++    * at the right buffer. The allocation handles follow their BOs. */
++   {
++      Device *device = CastDevice(RotateResourceIdentities->hDevice);
++      struct pipe_resource *prscs[16];
++      UINT n = NumResources < 16 ? NumResources : 16;
++      D3DKMT_HANDLE firstAllocation = CastResource(hResources[0])->hAllocation;
++
++      /* XUN_ROTATE_REVERSE=1: rotate the other way ([i] takes [i-1]) - experiment */
++      bool rev = getenv("XUN_ROTATE_REVERSE") != NULL;
++      for (UINT i = 0; i < n; ++i)
++         prscs[rev ? n - 1 - i : i] = CastPipeResource(hResources[i]);
++      device->pipe->flush(device->pipe, NULL, 0);
++      {
++         static unsigned xunRot;
++         if (++xunRot <= 60)
++            XunWddmLogf("  rotate%s: [0] %p a0x%x [1] %p a0x%x [2] %p a0x%x\n", rev ? " reverse" : "",
++                          CastResource(hResources[0])->resource, CastResource(hResources[0])->hAllocation,
++                          n > 1 ? CastResource(hResources[1])->resource : NULL, n > 1 ? CastResource(hResources[1])->hAllocation : 0,
++                          n > 2 ? CastResource(hResources[2])->resource : NULL, n > 2 ? CastResource(hResources[2])->hAllocation : 0);
++      }
++      fd_resource_rotate_storage(device->pipe, prscs, n);
++      if (!rev) {
++         for (UINT i = 0; i + 1 < n; ++i)
++            CastResource(hResources[i])->hAllocation = CastResource(hResources[i + 1])->hAllocation;
++         CastResource(hResources[n - 1])->hAllocation = firstAllocation;
++      } else {
++         D3DKMT_HANDLE lastAllocation = CastResource(hResources[n - 1])->hAllocation;
++         for (UINT i = n - 1; i > 0; --i)
++            CastResource(hResources[i])->hAllocation = CastResource(hResources[i - 1])->hAllocation;
++         CastResource(hResources[0])->hAllocation = lastAllocation;
++      }
+    }
+ 
+-   Resource *lastResource = CastResource(hResources[NumResources - 1]);
+-   lastResource->resource = firstResource;
+-
+    return S_OK;
+ }
+ 
+@@ -231,6 +280,7 @@ _RotateResourceIdentities(DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *RotateResourc
+ HRESULT APIENTRY
+ _Blt(DXGI_DDI_ARG_BLT *Blt)
+ {
++   XunWddmLogf("DXGI Blt (unsupported)\n");
+    LOG_UNSUPPORTED_ENTRYPOINT();
+ 
+    return S_OK;
+diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
+index 24131e5..84b7ccf 100644
+--- a/src/gallium/frontends/d3d10umd/Resource.cpp
++++ b/src/gallium/frontends/d3d10umd/Resource.cpp
+@@ -251,9 +251,27 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+    struct pipe_context *pipe = CastPipeContext(hDevice);
+    struct pipe_screen *screen = pipe->screen;
+ 
++   XunWddmLogf("CreateResource dim %u %ux%u fmt %u bind 0x%x misc 0x%x usage %u mips %u array %u samples %u primary %d\n",
++                 pCreateResource->ResourceDimension, pCreateResource->pMipInfoList[0].TexelWidth,
++                 pCreateResource->pMipInfoList[0].TexelHeight, pCreateResource->Format, pCreateResource->BindFlags,
++                 pCreateResource->MiscFlags, pCreateResource->Usage, pCreateResource->MipLevels,
++                 pCreateResource->ArraySize, pCreateResource->SampleDesc.Count, pCreateResource->pPrimaryDesc != NULL);
++   /* XunGpu: C:\xun\umd.noflip -> primaries are not scanned out (DXGI then blts to the
++    * kernel primary instead of flipping ours); without PRIMARY_OPTIONAL the runtime retries */
++   bool xunNoScanout = false;
++   if (pCreateResource->pPrimaryDesc && XunWddmNoFlip()) {
++      pCreateResource->pPrimaryDesc->DriverFlags = DXGI_DDI_PRIMARY_DRIVER_FLAG_NO_SCANOUT;
++      if (!(pCreateResource->pPrimaryDesc->Flags & DXGI_DDI_PRIMARY_OPTIONAL)) {
++         XunWddmLogf("  primary without PRIMARY_OPTIONAL -> DXGI_DDI_ERR_UNSUPPORTED (no-flip mode)\n");
++         SetError(hDevice, DXGI_DDI_ERR_UNSUPPORTED);
++         return;
++      }
++      xunNoScanout = true;
++   }
++
+    mtx_lock(&device->CreateResourceMtx);
+    device->device.allocationVidPn = 0;
+-   device->device.isPrimary = pCreateResource->pPrimaryDesc != NULL;
++   device->device.isPrimary = pCreateResource->pPrimaryDesc != NULL && !xunNoScanout;
+    device->device.hRTResource = hRTResource.handle;
+ 
+    Resource *pResource = CastResource(hResource);
+@@ -306,6 +324,9 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+    if ((pCreateResource->MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED)) {
+       templat.bind |= PIPE_BIND_SHARED;
+    }
++   if (templat.target != PIPE_BUFFER && XunWddmWanted(pCreateResource)) {
++      XunWddmTemplate(&templat);
++   }
+ 
+    if (templat.target != PIPE_BUFFER) {
+       if (!screen->is_format_supported(screen,
+@@ -313,9 +334,13 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+                                        templat.target,
+                                        templat.nr_samples,
+                                        templat.nr_storage_samples,
+-                                       templat.bind)) {
++                                       /* XunGpu: layout/sharing bits are not format caps;
++                                        * freedreno rejects any bit it does not confirm */
++                                       templat.bind & ~(PIPE_BIND_LINEAR | PIPE_BIND_SHARED |
++                                                        PIPE_BIND_SCANOUT))) {
+          debug_printf("%s: unsupported format %s\n",
+                      __func__, util_format_name(templat.format));
++         XunWddmLogf("  unsupported format %s bind 0x%x\n", util_format_name(templat.format), templat.bind);
+          SetError(hDevice, E_OUTOFMEMORY);
+          goto unlock;
+       }
+@@ -332,6 +357,12 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+    pResource->transfers = (struct pipe_transfer **)calloc(pResource->NumSubResources,
+                                                           sizeof *pResource->transfers);
+ 
++   if (pResource->resource && templat.target != PIPE_BUFFER && XunWddmWanted(pCreateResource)) {
++      if (FAILED(XunWddmCreateAllocation(device, pResource, pCreateResource, xunNoScanout))) {
++         SetError(hDevice, E_OUTOFMEMORY);
++      }
++   }
++
+    if (pCreateResource->pInitialDataUP) {
+       if (pResource->buffer) {
+          assert(pResource->NumSubResources == 1);
+@@ -441,6 +472,8 @@ OpenResource(D3D10DDI_HDEVICE hDevice,                            // IN
+    LOG_ENTRYPOINT();
+    
+    Device *pDevice = CastDevice(hDevice);
++   XunWddmLogf("OpenResource allocations %u priv %u\n", pOpenResource->NumAllocations,
++                 pOpenResource->NumAllocations ? pOpenResource->pOpenAllocationInfo[0].PrivateDriverDataSize : 0);
+    if (!pDevice->screen->resource_from_handle) {
+       SetError(hDevice, E_OUTOFMEMORY);
+       return;
+@@ -457,6 +490,9 @@ OpenResource(D3D10DDI_HDEVICE hDevice,                            // IN
+    whandle.type = WINSYS_HANDLE_TYPE_WIN32_HANDLE;
+    whandle.handle = (HANDLE)pOpenResource->hKMResource.handle;
+    
++   /* XunGpu C2: the allocation's private data names the BO */
++   pResource->resource = XunWddmOpen(pDevice, pOpenResource, &pResource->hAllocation);
++   if (!pResource->resource)
+    pResource->resource =
+       pDevice->screen->resource_from_handle(pDevice->screen, NULL, &whandle, 0);
+    
+@@ -518,6 +554,7 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
+    }
+    free(pResource->transfers);
+ 
++   XunWddmDestroyAllocation(CastDevice(hDevice), pResource);
+    pipe_resource_reference(&pResource->resource, NULL);
+ }
+ 
+@@ -723,6 +760,12 @@ ResourceCopy(D3D10DDI_HDEVICE hDevice,          // IN
+    struct pipe_context *pipe = pDevice->pipe;
+    Resource *pDstResource = CastResource(hDstResource);
+    Resource *pSrcResource = CastResource(hSrcResource);
++   if (pDstResource->hAllocation || pSrcResource->hAllocation) {   /* XunGpu: swapchain copies */
++      static unsigned xunCopies;
++      if (++xunCopies <= 300)
++         XunWddmLogf("%s dst %p(alloc 0x%x) <- src %p(alloc 0x%x)\n", __func__, pDstResource->resource,
++                       pDstResource->hAllocation, pSrcResource->resource, pSrcResource->hAllocation);
++   }
+    struct pipe_resource *dst_resource = pDstResource->resource;
+    struct pipe_resource *src_resource = pSrcResource->resource;
+    bool compatible;
+@@ -797,6 +840,12 @@ ResourceCopyRegion(D3D10DDI_HDEVICE hDevice,                // IN
+    struct pipe_context *pipe = pDevice->pipe;
+    Resource *pDstResource = CastResource(hDstResource);
+    Resource *pSrcResource = CastResource(hSrcResource);
++   if (pDstResource->hAllocation || pSrcResource->hAllocation) {   /* XunGpu: swapchain copies */
++      static unsigned xunCopies;
++      if (++xunCopies <= 300)
++         XunWddmLogf("%s dst %p(alloc 0x%x) <- src %p(alloc 0x%x)\n", __func__, pDstResource->resource,
++                       pDstResource->hAllocation, pSrcResource->resource, pSrcResource->hAllocation);
++   }
+    struct pipe_resource *dst_resource = pDstResource->resource;
+    struct pipe_resource *src_resource = pSrcResource->resource;
+ 
+diff --git a/src/gallium/frontends/d3d10umd/Shader.cpp b/src/gallium/frontends/d3d10umd/Shader.cpp
+index 4eef1f8..3243fc3 100644
+--- a/src/gallium/frontends/d3d10umd/Shader.cpp
++++ b/src/gallium/frontends/d3d10umd/Shader.cpp
+@@ -270,7 +270,9 @@ SetShaderResources(enum pipe_shader_type shader_type,                  // IN
+     * XXX: Now that the semantics are actually the same in gallium, should
+     * probably think about not updating all always... It should just work.
+     */
+-   pipe->set_sampler_views(pipe, shader_type, 0, PIPE_MAX_SHADER_SAMPLER_VIEWS,
++   /* XunGpu: freedreno keeps PIPE_MAX_SAMPLERS (32) views per stage; passing 128 overflowed
++    * fd_texture_stateobj::textures[] and crashed DWM */
++   pipe->set_sampler_views(pipe, shader_type, 0, PIPE_MAX_SAMPLERS,
+                            0, false, sampler_views);
+ }
+ 
+diff --git a/src/gallium/frontends/d3d10umd/ShaderTGSI.c b/src/gallium/frontends/d3d10umd/ShaderTGSI.c
+index 6f5006b..d80905d 100644
+--- a/src/gallium/frontends/d3d10umd/ShaderTGSI.c
++++ b/src/gallium/frontends/d3d10umd/ShaderTGSI.c
+@@ -2311,6 +2311,15 @@ Shader_tgsi_translate(const unsigned *code,
+    assert(tokens);
+    ureg_destroy(ureg);
+ 
++   {
++      extern bool xun_log_tgsi;   /* XunGpu: xun_wddm.cpp */
++      if (xun_log_tgsi) {
++         fprintf(stderr, "---- TGSI (%u tokens)\n", nr_tokens);
++         tgsi_dump_to_file(tokens, 0, stderr);
++         fflush(stderr);
++      }
++   }
++
+    if (st_debug & ST_DEBUG_TGSI) {
+       tgsi_dump(tokens, 0);
+    }
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 19de592..2aecca7 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -94,6 +94,7 @@ struct Device
+    void *empty_vs;
+ 
+    struct DepthStencilState *dss;   /* XunGpu: current D3D depth-stencil state */
++   struct gdikmt_context *xunCtx; /* XunGpu C2: WDDM context for pfnPresentCb */
+ 
+    enum mesa_prim primitive;
+ 
+@@ -151,11 +152,16 @@ CastPipeDevice(DXGI_DDI_HDEVICE hDevice)
+ }
+ 
+ 
++extern "C" void XunWddmLogf(const char *fmt, ...);   /* XunGpu: xun_wddm.cpp */
++
++#define SetError(hDevice, hr) SetErrorAt(hDevice, hr, __func__, __LINE__)
++
+ static inline void
+-SetError(D3D10DDI_HDEVICE hDevice, HRESULT hr)
++SetErrorAt(D3D10DDI_HDEVICE hDevice, HRESULT hr, const char *func, int line)
+ {
+    if (FAILED(hr)) {
+       Device *pDevice = CastDevice(hDevice);
++      XunWddmLogf("SetError 0x%08lx in %s:%d\n", (unsigned long)hr, func, line);
+       pDevice->UMCallbacks.pfnSetErrorCb(pDevice->hRTCoreLayer, hr);
+    }
+ }
+@@ -170,6 +176,7 @@ struct Resource
+    struct pipe_resource *resource;
+    struct pipe_transfer **transfers;
+    struct pipe_stream_output_target *so_target;
++   D3DKMT_HANDLE hAllocation;       /* XunGpu C2: WDDM allocation naming the BO (0 = none) */
+ };
+ 
+ 
+@@ -421,3 +428,14 @@ CastPipeQuery(D3D10DDI_HQUERY hQuery)
+    return pQuery ? pQuery->handle : NULL;
+ }
+ 
++
++
++/* XunGpu step C2 (xun_wddm.cpp) */
++bool XunWddmWanted(const D3D10DDIARG_CREATERESOURCE *pCreate);
++void XunWddmTemplate(struct pipe_resource *templat);
++HRESULT XunWddmCreateAllocation(Device *pDevice, Resource *pResource, const D3D10DDIARG_CREATERESOURCE *pCreate, bool noScanout);
++bool XunWddmNoFlip(void);
++void XunWddmDestroyAllocation(Device *pDevice, Resource *pResource);
++struct pipe_resource *XunWddmOpen(Device *pDevice, const D3D10DDIARG_OPENRESOURCE *pOpen, D3DKMT_HANDLE *phAllocation);
++HRESULT XunWddmPresent(Device *pDevice, Resource *pSrc, Resource *pDst, void *pDXGIContext);
++bool XunWddmEnabled(void);
+diff --git a/src/gallium/frontends/d3d10umd/meson.build b/src/gallium/frontends/d3d10umd/meson.build
+index 83bc243..b48f556 100644
+--- a/src/gallium/frontends/d3d10umd/meson.build
++++ b/src/gallium/frontends/d3d10umd/meson.build
+@@ -24,7 +24,8 @@ libd3d10umd = static_library(
+     'ShaderParse.c',
+     'ShaderTGSI.c',
+     'D3DKMT.cpp',
+-    'gdikmt_d3dddi.cpp'
++    'gdikmt_d3dddi.cpp',
++    'xun_wddm.cpp'
+   ),
+   c_args : _c_args_d3d10umd,
+   cpp_args : _c_args_d3d10umd,
+diff --git a/src/gallium/frontends/d3d10umd/xun_wddm.cpp b/src/gallium/frontends/d3d10umd/xun_wddm.cpp
+new file mode 100644
+index 0000000..cd028ba
+--- /dev/null
++++ b/src/gallium/frontends/d3d10umd/xun_wddm.cpp
+@@ -0,0 +1,295 @@
++/*
++ * XunGpu step C2: the WDDM side of resources that leave the UMD (docs/P8_gpu.md in xun-woa).
++ *
++ * freedreno renders into BOs owned by the XunGpuW KMD (msm escapes). Resources that Dxgkrnl, DWM or
++ * other processes must see (primaries, swapchain buffers, shared surfaces) also get a WDDM allocation
++ * whose private data (struct xungpu_alloc) names the BO: the KMD then scans out / blts / opens the
++ * same pages. Such resources are created linear. Present goes through pfnPresentCb after the GPU work
++ * finished (the KMD copies with the CPU). Same model as viogpu3d + virgl_gdi_winsys, but the BO stays
++ * a freedreno BO.
++ */
++
++#include <stdarg.h>
++
++#include "Device.h"
++#include "State.h"
++#include "Debug.h"
++#include "Format.h"
++
++#include "frontend/winsys_handle.h"
++#include "pipe/p_defines.h"
++#include "util/u_inlines.h"
++#include "util/os_time.h"
++
++#include "../../../freedreno/drm/wddm/xungpu_escape.h"
++
++static unsigned
++XunD3dFormat(enum pipe_format f)
++{
++   switch (f) {
++   case PIPE_FORMAT_B8G8R8A8_UNORM:
++   case PIPE_FORMAT_B8G8R8A8_SRGB:
++      return 21;                                   /* D3DDDIFMT_A8R8G8B8 */
++   case PIPE_FORMAT_B8G8R8X8_UNORM:
++   case PIPE_FORMAT_B8G8R8X8_SRGB:
++      return 22;                                   /* D3DDDIFMT_X8R8G8B8 */
++   case PIPE_FORMAT_R8G8B8A8_UNORM:
++   case PIPE_FORMAT_R8G8B8A8_SRGB:
++      return 32;                                   /* D3DDDIFMT_A8B8G8R8 */
++   default:
++      return 0;
++   }
++}
++
++static enum pipe_format
++XunPipeFormat(unsigned d3d)
++{
++   switch (d3d) {
++   case 22:
++      return PIPE_FORMAT_B8G8R8X8_UNORM;
++   case 32:
++      return PIPE_FORMAT_R8G8B8A8_UNORM;
++   default:
++      return PIPE_FORMAT_B8G8R8A8_UNORM;
++   }
++}
++
++bool
++XunWddmWanted(const D3D10DDIARG_CREATERESOURCE *pCreate)
++{
++   return pCreate->pPrimaryDesc != NULL ||
++          (pCreate->MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED) ||
++          (pCreate->BindFlags & D3D10_DDI_BIND_PRESENT);
++}
++
++void
++XunWddmTemplate(struct pipe_resource *templat)
++{
++   /* the KMD reads/writes these pixels with the CPU: no UBWC/tiling */
++   templat->bind |= PIPE_BIND_LINEAR | PIPE_BIND_SHARED;
++}
++
++HRESULT
++XunWddmCreateAllocation(Device *pDevice, Resource *pResource, const D3D10DDIARG_CREATERESOURCE *pCreate,
++                          bool noScanout)
++{
++   struct pipe_screen *screen = pDevice->screen;
++   struct pipe_resource *res = pResource->resource;
++   struct winsys_handle wh;
++   struct xungpu_alloc a;
++   D3DDDI_ALLOCATIONINFO ai;
++   struct gdikmt_createallocation opts;
++   NTSTATUS st;
++
++   memset(&wh, 0, sizeof(wh));
++   wh.type = WINSYS_HANDLE_TYPE_SHARED;
++   if (!screen->resource_get_handle(screen, pDevice->pipe, res, &wh, 0)) {
++      XunWddmLogf("xun: resource_get_handle failed\n");
++      return E_OUTOFMEMORY;
++   }
++
++   memset(&a, 0, sizeof(a));
++   a.magic = XUNGPU_ALLOC_MAGIC;
++   a.kind = XUNGPU_ALLOC_UMD;
++   a.width = res->width0;
++   a.height = res->height0;
++   a.pitch = wh.stride;
++   a.format = XunD3dFormat(res->format);
++   a.bo = (unsigned)(uintptr_t)wh.handle;
++   a.bo_offset = wh.offset;
++   a.size = wh.stride * res->height0;
++   if (pCreate->pPrimaryDesc && !noScanout) {
++      a.flags |= XUNGPU_ALLOC_F_PRIMARY;
++      a.vidpn = pCreate->pPrimaryDesc->VidPnSourceId;
++      pDevice->device.allocationVidPn = pCreate->pPrimaryDesc->VidPnSourceId;
++   }
++
++   memset(&ai, 0, sizeof(ai));
++   ai.pPrivateDriverData = &a;
++   ai.PrivateDriverDataSize = sizeof(a);
++   memset(&opts, 0, sizeof(opts));
++   opts.NumAllocations = 1;
++   opts.pAllocationInfo = &ai;
++   st = pDevice->device.base.createAllocation(&pDevice->device.base, &opts);
++   if (st < 0) {
++      XunWddmLogf("xun: AllocateCb failed 0x%08lx\n", (unsigned long)st);
++      return E_OUTOFMEMORY;
++   }
++   pResource->hAllocation = ai.hAllocation;
++   return S_OK;
++}
++
++void
++XunWddmDestroyAllocation(Device *pDevice, Resource *pResource)
++{
++   /* allocations made with hRTResource belong to the runtime resource: the runtime frees them
++      (pfnDeallocateCb here returned STATUS_INVALID_PARAMETER, D3D11 journal) */
++   (void)pDevice;
++   pResource->hAllocation = 0;
++}
++
++/* OpenResource of a resource created by another process / the kernel: import its BO by name */
++struct pipe_resource *
++XunWddmOpen(Device *pDevice, const D3D10DDIARG_OPENRESOURCE *pOpen, D3DKMT_HANDLE *phAllocation)
++{
++   const struct xungpu_alloc *a;
++   struct pipe_resource templat;
++   struct winsys_handle wh;
++
++   if (pOpen->NumAllocations < 1 || pOpen->pOpenAllocationInfo == NULL) {
++      return NULL;
++   }
++   a = (const struct xungpu_alloc *)pOpen->pOpenAllocationInfo[0].pPrivateDriverData;
++   if (a == NULL || pOpen->pOpenAllocationInfo[0].PrivateDriverDataSize < sizeof(*a) ||
++       a->magic != XUNGPU_ALLOC_MAGIC || a->bo == 0) {
++      XunWddmLogf("xun: OpenResource without a BO (kind %u)\n", a ? a->kind : ~0u);
++      return NULL;
++   }
++   memset(&templat, 0, sizeof(templat));
++   templat.target = PIPE_TEXTURE_2D;
++   templat.format = XunPipeFormat(a->format);
++   templat.width0 = a->width;
++   templat.height0 = a->height;
++   templat.depth0 = 1;
++   templat.array_size = 1;
++   templat.last_level = 0;
++   templat.bind = PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET | PIPE_BIND_LINEAR | PIPE_BIND_SHARED;
++   memset(&wh, 0, sizeof(wh));
++   wh.type = WINSYS_HANDLE_TYPE_SHARED;
++   wh.handle = (HANDLE)(uintptr_t)a->bo;
++   wh.stride = a->pitch;
++   wh.offset = a->bo_offset;
++   *phAllocation = pOpen->pOpenAllocationInfo[0].hAllocation;
++   return pDevice->screen->resource_from_handle(pDevice->screen, &templat, &wh, 0);
++}
++
++/* DXGI Present: finish the GPU work on the source, then let the KMD blt/flip it */
++HRESULT
++XunWddmPresent(Device *pDevice, Resource *pSrc, Resource *pDst, void *pDXGIContext)
++{
++   struct pipe_context *pipe = pDevice->pipe;
++   struct pipe_screen *screen = pDevice->screen;
++   struct pipe_fence_handle *fence = NULL;
++
++   if (!pSrc->hAllocation) {
++      XunWddmLogf("xun: Present of a resource without allocation\n");
++      return S_OK;
++   }
++   pipe->flush(pipe, &fence, 0);
++   if (fence) {
++      screen->fence_finish(screen, NULL, fence, OS_TIMEOUT_INFINITE);
++      screen->fence_reference(screen, &fence, NULL);
++   }
++   if (!pDevice->xunCtx) {
++      /* own pfnCreateContextCb: gdikmt's leaves EngineAffinity 0 (invalid for a MultiEngineAware KMD) */
++      struct gdikmt_context_d3dddi *c = (struct gdikmt_context_d3dddi *)calloc(1, sizeof(*c));
++      D3DDDICB_CREATECONTEXT cc;
++      HRESULT hrc;
++      if (!c)
++         return E_OUTOFMEMORY;
++      memset(&cc, 0, sizeof(cc));
++      cc.NodeOrdinal = 0;
++      cc.EngineAffinity = 1;
++      hrc = pDevice->device.KTCallbacks.pfnCreateContextCb(pDevice->device.hRTDevice, &cc);
++      XunWddmLogf("xun: CreateContextCb -> 0x%08lx hContext %p\n", (unsigned long)hrc, cc.hContext);
++      if (FAILED(hrc)) {
++         free(c);
++         return hrc;
++      }
++      c->base.device = &pDevice->device.base;
++      c->hContext = cc.hContext;
++      pDevice->xunCtx = &c->base;
++   }
++   /* not gdikmt's present(): it never passes a destination; a DXGI blt present with hDstResource
++      (DWM to its primary) needs hDstAllocation */
++   {
++      DXGIDDICB_PRESENT p;
++      memset(&p, 0, sizeof(p));
++      p.hSrcAllocation = pSrc->hAllocation;
++      p.hDstAllocation = pDst ? pDst->hAllocation : 0;
++      p.pDXGIContext = pDXGIContext;
++      p.hContext = ((struct gdikmt_context_d3dddi *)pDevice->xunCtx)->hContext;
++      HRESULT hr = pDevice->device.pDXGIBaseCallbacks->pfnPresentCb(pDevice->device.hRTDevice, &p);
++      if (FAILED(hr))
++         XunWddmLogf("xun: PresentCb src 0x%x dst 0x%x ctx %p -> 0x%08lx\n", p.hSrcAllocation, p.hDstAllocation,
++                       p.hContext, (unsigned long)hr);
++      return hr;
++   }
++}
++
++/* Debug log for processes without a console (DWM): if C:\ProgramData\xun\umd.log.enable exists,
++ * stderr (Mesa's fprintf) and DebugPrintf go to C:\ProgramData\xun\umd-<pid>.log; with
++ * umd.tgsi also every translated shader is dumped (the last one before a hang is the culprit). */
++extern "C" { bool xun_log_tgsi; }
++static bool xun_log_on;
++
++static void
++XunWddmLogInit(void)
++{
++   static bool done;
++   char path[MAX_PATH];
++
++   if (done)
++      return;
++   done = true;
++   /* C:\ProgramData\xun\umd.env: NAME=VALUE lines (e.g. FD_MESA_DEBUG=sysmem) for processes
++    * without an environment of ours, like DWM; read before the screen is created */
++   {
++      FILE *f = fopen("C:\\ProgramData\\xun\\umd.env", "r");
++      if (f) {
++         char line[256];
++         while (fgets(line, sizeof(line), f)) {
++            size_t n = strlen(line);
++            while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' '))
++               line[--n] = 0;
++            if (n && line[0] != '#' && strchr(line, '='))
++               _putenv(line);
++         }
++         fclose(f);
++      }
++   }
++   if (GetFileAttributesA("C:\\ProgramData\\xun\\umd.log.enable") == INVALID_FILE_ATTRIBUTES)
++      return;
++   snprintf(path, sizeof(path), "C:\\ProgramData\\xun\\umd-%lu.log", (unsigned long)GetCurrentProcessId());
++   if (freopen(path, "a", stderr)) {
++      setvbuf(stderr, NULL, _IONBF, 0);
++      xun_log_on = true;
++      xun_log_tgsi = GetFileAttributesA("C:\\ProgramData\\xun\\umd.tgsi") != INVALID_FILE_ATTRIBUTES;
++      fprintf(stderr, "==== xungpu UMD log, pid %lu, FD_MESA_DEBUG=%s ====\n", (unsigned long)GetCurrentProcessId(),
++              getenv("FD_MESA_DEBUG") ? getenv("FD_MESA_DEBUG") : "");
++   }
++}
++
++extern "C" void
++XunWddmLog(const char *text)
++{
++   if (xun_log_on)
++      fputs(text, stderr);
++}
++
++extern "C" void
++XunWddmLogf(const char *fmt, ...)
++{
++   va_list ap;
++
++   if (!xun_log_on)
++      return;
++   va_start(ap, fmt);
++   vfprintf(stderr, fmt, ap);
++   va_end(ap);
++}
++
++bool
++XunWddmNoFlip(void)
++{
++   return GetFileAttributesA("C:\\xun\\umd.noflip") != INVALID_FILE_ATTRIBUTES;
++}
++
++/* opt-in while experimental: env XUNGPU_ENABLE or C:\xun\umd.enable (needed for DWM) */
++bool
++XunWddmEnabled(void)
++{
++   XunWddmLogInit();
++   return GetEnvironmentVariableA("XUNGPU_ENABLE", NULL, 0) != 0 ||
++          GetFileAttributesA("C:\\xun\\umd.enable") != INVALID_FILE_ATTRIBUTES;
++}

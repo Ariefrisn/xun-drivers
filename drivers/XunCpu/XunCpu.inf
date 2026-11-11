@@ -1,0 +1,57 @@
+;
+; XunCpu.inf - CPU frequency (cpufreq-hw) of Redmi Pad SE (xun, SM6225)
+; Root-enumerated KMDF driver: logs and sets the CPU frequency level of both clusters.
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+CatalogFile = XunCpu.cat
+DriverVer   = ; set by stampinf
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+XunCpu.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%DeviceDesc% = XunCpu_Device, Root\XunCpu
+
+[XunCpu_Device.NT]
+CopyFiles = XunCpu_CopyFiles
+
+[XunCpu_CopyFiles]
+XunCpu.sys
+
+[XunCpu_Device.NT.Services]
+AddService = XunCpu, 0x00000002, XunCpu_Service
+
+[XunCpu_Service]
+DisplayName   = %ServiceName%
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\XunCpu.sys
+
+[XunCpu_Device.NT.Wdf]
+KmdfService = XunCpu, XunCpu_WdfSection
+
+[XunCpu_WdfSection]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+ProviderName     = "xun-woa"
+ManufacturerName = "xun-woa"
+DiskName         = "XunCpu Installation Disk"
+DeviceDesc       = "CPU Frequency Control (Redmi Pad SE)"
+ServiceName      = "XunCpu"

@@ -1,0 +1,64 @@
+;
+; XunAudio.inf - ADSP (LPASS) bring-up for sound on Redmi Pad SE (xun, SM6225)
+; Root-enumerated KMDF driver: TrustZone PAS boot, SMP2P, GLINK/QRTR, pd-mapper, GPR.
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+CatalogFile = XunAudio.cat
+DriverVer   = ; set by stampinf
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+XunAudio.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%DeviceDesc% = XunAudio_Device, Root\XunAudio
+
+[XunAudio_Device.NT]
+CopyFiles = XunAudio_CopyFiles
+
+[XunAudio_CopyFiles]
+XunAudio.sys
+
+; admin + SYSTEM only: the lab interface (\\.\XunAudio) pokes hardware
+[XunAudio_Device.NT.HW]
+AddReg = XunAudio_Security
+
+[XunAudio_Security]
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;BA)"
+
+[XunAudio_Device.NT.Services]
+AddService = XunAudio, 0x00000002, XunAudio_Service
+
+[XunAudio_Service]
+DisplayName   = %ServiceName%
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\XunAudio.sys
+
+[XunAudio_Device.NT.Wdf]
+KmdfService = XunAudio, XunAudio_WdfSection
+
+[XunAudio_WdfSection]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+ProviderName     = "xun-woa"
+ManufacturerName = "xun-woa"
+DiskName         = "XunAudio Installation Disk"
+DeviceDesc       = "Audio DSP (Redmi Pad SE)"
+ServiceName      = "XunAudio"

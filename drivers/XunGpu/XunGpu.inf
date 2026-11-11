@@ -1,0 +1,57 @@
+;
+; XunGpu.inf - Adreno 610 bring-up (G1) on Redmi Pad SE (xun, SM6225)
+; Root-enumerated KMDF test driver: GPU clocks, power domains, microcode, ring buffer.
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+CatalogFile = XunGpu.cat
+DriverVer   = ; set by stampinf
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+XunGpu.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%DeviceDesc% = XunGpu_Device, Root\XunGpu
+
+[XunGpu_Device.NT]
+CopyFiles = XunGpu_CopyFiles
+
+[XunGpu_CopyFiles]
+XunGpu.sys
+
+[XunGpu_Device.NT.Services]
+AddService = XunGpu, 0x00000002, XunGpu_Service
+
+[XunGpu_Service]
+DisplayName   = %ServiceName%
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\XunGpu.sys
+
+[XunGpu_Device.NT.Wdf]
+KmdfService = XunGpu, XunGpu_WdfSection
+
+[XunGpu_WdfSection]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+ProviderName     = "xun-woa"
+ManufacturerName = "xun-woa"
+DiskName         = "XunGpu Installation Disk"
+DeviceDesc       = "Adreno 610 bring-up (Redmi Pad SE)"
+ServiceName      = "XunGpu"

@@ -1,0 +1,661 @@
+diff --git a/meson.build b/meson.build
+index 1b1f5b8..c000ab2 100644
+--- a/meson.build
++++ b/meson.build
+@@ -783,13 +783,22 @@ if with_gallium_st_nine
+   endif
+ endif
+ 
++# XunGpu: freedreno on Windows talks to the WDDM KMD through a libdrm shim (src/freedreno/drm/wddm)
++if with_gallium_freedreno and host_machine.system() == 'windows'
++  pre_args += ['-I' + (meson.current_source_dir() / 'src' / 'freedreno' / 'drm' / 'wddm' / 'include'),
++               '-I' + (meson.current_source_dir() / 'src' / 'freedreno' / 'drm' / 'wddm'),
++               '-FI' + (meson.current_source_dir() / 'src' / 'freedreno' / 'drm' / 'wddm' / 'fd_wddm_compat.h'),
++               '-DFD_WDDM']
++endif
++
+ with_gallium_st_d3d10umd =  get_option('gallium-d3d10umd')
+ if with_gallium_st_d3d10umd
+   if not [
+            with_gallium_swrast,
+            with_gallium_virgl,
++           with_gallium_freedreno,
+          ].contains(true)
+-    error('The d3d10umd state tracker requires gallium softpipe/llvmpipe or virgl.')
++    error('The d3d10umd state tracker requires gallium softpipe/llvmpipe, virgl or freedreno.')
+   endif
+   if with_gallium_softpipe and with_gallium_virgl
+     warning('The d3d10umd state trackes is built with both softpipe/llvmpipe and virgl, only virgl will be used.')
+diff --git a/src/compiler/shader_info.h b/src/compiler/shader_info.h
+index 6d4fdae..dd0f463 100644
+--- a/src/compiler/shader_info.h
++++ b/src/compiler/shader_info.h
+@@ -410,7 +410,7 @@ typedef struct shader_info {
+          bool untyped_color_outputs:1;
+ 
+          /** gl_FragDepth layout for ARB_conservative_depth. */
+-         enum gl_frag_depth_layout depth_layout:3;
++         enum gl_frag_depth_layout depth_layout:4; /* XunGpu: +1 bit, enum bitfields are signed on MSVC ABI */
+ 
+          /**
+           * Interpolation qualifiers for drivers that lowers color inputs
+@@ -432,8 +432,8 @@ typedef struct shader_info {
+           * Defined by AMD_shader_early_and_late_fragment_tests.
+           */
+          bool early_and_late_fragment_tests:1;
+-         enum gl_frag_stencil_layout stencil_front_layout:3;
+-         enum gl_frag_stencil_layout stencil_back_layout:3;
++         enum gl_frag_stencil_layout stencil_front_layout:4;
++         enum gl_frag_stencil_layout stencil_back_layout:4;
+       } fs;
+ 
+       struct {
+@@ -445,7 +445,7 @@ typedef struct shader_info {
+           * Arrangement of invocations used to calculate derivatives in a compute
+           * shader.  From NV_compute_shader_derivatives.
+           */
+-         enum gl_derivative_group derivative_group:2;
++         enum gl_derivative_group derivative_group:3;
+ 
+          /*
+           * If the shader might run with shared mem on top of `shared_size`.
+diff --git a/src/freedreno/drm/freedreno_device.c b/src/freedreno/drm/freedreno_device.c
+index ce95c9f..06222a2 100644
+--- a/src/freedreno/drm/freedreno_device.c
++++ b/src/freedreno/drm/freedreno_device.c
+@@ -147,6 +147,13 @@ fail:
+ struct fd_device *
+ fd_device_new_dup(int fd)
+ {
++#ifdef FD_WDDM
++   /* fake DRM fds of the XunGpu shim cannot be dup()ed: share it */
++   struct fd_device *wdev = fd_device_new(fd);
++   if (wdev)
++      wdev->closefd = 0;
++   return wdev;
++#endif
+    int dup_fd = os_dupfd_cloexec(fd);
+    struct fd_device *dev = fd_device_new(dup_fd);
+    if (dev)
+diff --git a/src/freedreno/drm/freedreno_priv.h b/src/freedreno/drm/freedreno_priv.h
+index b2e7604..07353ff 100644
+--- a/src/freedreno/drm/freedreno_priv.h
++++ b/src/freedreno/drm/freedreno_priv.h
+@@ -511,8 +511,8 @@ bool fd_dbg(void);
+       mesa_loge("%s:%d: " fmt, __func__, __LINE__, ##__VA_ARGS__);             \
+    } while (0)
+ 
+-#define U642VOID(x) ((void *)(unsigned long)(x))
+-#define VOID2U64(x) ((uint64_t)(unsigned long)(x))
++#define U642VOID(x) ((void *)(uintptr_t)(x))
++#define VOID2U64(x) ((uint64_t)(uintptr_t)(x))
+ 
+ #ifdef HAVE_VALGRIND
+ #include <memcheck.h>
+diff --git a/src/freedreno/drm/meson.build b/src/freedreno/drm/meson.build
+index ffaf6c9..edd8412 100644
+--- a/src/freedreno/drm/meson.build
++++ b/src/freedreno/drm/meson.build
+@@ -46,6 +46,10 @@ libfreedreno_drm_msm_files = files(
+ )
+ libfreedreno_drm_files += libfreedreno_drm_msm_files
+ 
++if host_machine.system() == 'windows'
++  libfreedreno_drm_files += files('wddm/fd_wddm.c')
++endif
++
+ libfreedreno_drm_virtio_files = files(
+   'virtio/virtio_bo.c',
+   'virtio/virtio_device.c',
+@@ -73,7 +77,7 @@ libfreedreno_drm = static_library(
+   gnu_symbol_visibility : 'hidden',
+   dependencies : libfreedreno_drm_deps,
+   # TODO
+-  link_with : [libvdrm],
++  link_with : (host_machine.system() == 'windows') ? [] : [libvdrm],
+   build_by_default : false,
+ )
+ 
+diff --git a/src/freedreno/ir3/instr-a3xx.h b/src/freedreno/ir3/instr-a3xx.h
+index 39471c1..4a9dfb4 100644
+--- a/src/freedreno/ir3/instr-a3xx.h
++++ b/src/freedreno/ir3/instr-a3xx.h
+@@ -32,8 +32,15 @@
+ #include <stdio.h>
+ 
+ /* clang-format off */
++#ifdef FD_WDDM
++/* COFF weak externals with different defaults per object conflict at link time (LNK1227);
++   disasm-a3xx.c always defines it, so a plain declaration is enough on Windows. */
++void ir3_assert_handler(const char *expr, const char *file, int line,
++                        const char *func) __attribute__((__noreturn__));
++#else
+ void ir3_assert_handler(const char *expr, const char *file, int line,
+                         const char *func) __attribute__((weak)) __attribute__((__noreturn__));
++#endif
+ /* clang-format on */
+ 
+ /* A wrapper for assert() that allows overriding handling of a failed
+diff --git a/src/freedreno/ir3/ir3_disk_cache.c b/src/freedreno/ir3/ir3_disk_cache.c
+index a7c3955..c098b7e 100644
+--- a/src/freedreno/ir3/ir3_disk_cache.c
++++ b/src/freedreno/ir3/ir3_disk_cache.c
+@@ -50,6 +50,9 @@ ir3_disk_cache_init(struct ir3_compiler *compiler)
+ {
+    if (ir3_shader_debug & IR3_DBG_NOCACHE)
+       return;
++#ifdef FD_WDDM
++   return;   /* no ELF build-id on Windows: no on-disk shader cache */
++#else
+ 
+    const char *renderer = fd_dev_name(compiler->dev_id);
+    const struct build_id_note *note =
+@@ -66,6 +69,7 @@ ir3_disk_cache_init(struct ir3_compiler *compiler)
+    if (compiler->options.robust_buffer_access2)
+       driver_flags |= IR3_DBG_ROBUST_UBO_ACCESS;
+    compiler->disk_cache = disk_cache_create(renderer, timestamp, driver_flags);
++#endif
+ }
+ 
+ void
+diff --git a/src/freedreno/ir3/ir3_shader.h b/src/freedreno/ir3/ir3_shader.h
+index 4a403dd..fdfb672 100644
+--- a/src/freedreno/ir3/ir3_shader.h
++++ b/src/freedreno/ir3/ir3_shader.h
+@@ -809,7 +809,7 @@ struct ir3_shader_variant {
+ 
+          /** The number of vertices in the TCS output patch. */
+          uint8_t tcs_vertices_out;
+-         enum gl_tess_spacing spacing:2; /*gl_tess_spacing*/
++         enum gl_tess_spacing spacing:3; /*gl_tess_spacing; XunGpu: :3, signed on MSVC ABI */
+ 
+          /** Is the vertex order counterclockwise? */
+          bool ccw:1;
+diff --git a/src/freedreno/meson.build b/src/freedreno/meson.build
+index b455cd6..8cfeb57 100644
+--- a/src/freedreno/meson.build
++++ b/src/freedreno/meson.build
+@@ -28,7 +28,7 @@ subdir('ir2')
+ subdir('ir3')
+ subdir('fdl')
+ 
+-if system_has_kms_drm
++if system_has_kms_drm or host_machine.system() == 'windows'
+   subdir('drm')
+ endif
+ 
+diff --git a/src/gallium/auxiliary/nir/tgsi_to_nir.c b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+index 44b81b8..2a97506 100644
+--- a/src/gallium/auxiliary/nir/tgsi_to_nir.c
++++ b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+@@ -587,7 +587,11 @@ ttn_src_for_file_and_index(struct ttn_compile *c, unsigned file, unsigned index,
+ 
+       switch (c->scan->system_value_semantic_name[index]) {
+       case TGSI_SEMANTIC_VERTEXID_NOBASE:
+-         load = nir_load_vertex_id_zero_base(b);
++         /* XunGpu: freedreno only feeds SYSTEM_VALUE_VERTEX_ID to the VS (VFD_CNTL_1
++          * REGID4VTX); vertex_id_zero_base stayed r63 and every vertex read garbage. For
++          * Draw(count, start) load_vertex_id is exactly D3D's SV_VertexID (start + i); for
++          * DrawIndexed it is index + BaseVertexLocation (D3D: index) - known limitation. */
++         load = nir_load_vertex_id(b);
+          break;
+       case TGSI_SEMANTIC_VERTEXID:
+          load = nir_load_vertex_id(b);
+@@ -2022,6 +2026,14 @@ ttn_emit_instruction(struct ttn_compile *c)
+       ttn_barrier(b);
+       break;
+ 
++   case TGSI_OPCODE_RET:
++      /* XunGpu: d3d10umd ends every DXBC main with RET. Outputs are stored after the last
++       * instruction (ttn_add_output_stores), so a real return would skip them: a top-level RET is
++       * a no-op. A nested (early) RET is not supported yet and is ignored with a warning. */
++      if (nir_cursor_current_block(b->cursor)->cf_node.parent != &b->impl->cf_node)
++         fprintf(stderr, "tgsi_to_nir: nested RET ignored\n");
++      break;
++
+    default:
+       if (op_trans[tgsi_op] != 0 || tgsi_op == TGSI_OPCODE_MOV) {
+          dst = ttn_alu(b, op_trans[tgsi_op], dst_bitsize, src);
+diff --git a/src/gallium/auxiliary/renderonly/renderonly.h b/src/gallium/auxiliary/renderonly/renderonly.h
+index de22b37..ae787e2 100644
+--- a/src/gallium/auxiliary/renderonly/renderonly.h
++++ b/src/gallium/auxiliary/renderonly/renderonly.h
+@@ -105,7 +105,11 @@ renderonly_get_handle(struct renderonly_scanout *scanout,
+       return false;
+ 
+    assert(handle->type == WINSYS_HANDLE_TYPE_KMS);
++#ifdef _WIN32
++   handle->handle = (HANDLE)(uintptr_t)scanout->handle;
++#else
+    handle->handle = scanout->handle;
++#endif
+    handle->stride = scanout->stride;
+ 
+    return true;
+diff --git a/src/gallium/auxiliary/util/u_trace_gallium.c b/src/gallium/auxiliary/util/u_trace_gallium.c
+index df79a7c..707ed76 100644
+--- a/src/gallium/auxiliary/util/u_trace_gallium.c
++++ b/src/gallium/auxiliary/util/u_trace_gallium.c
+@@ -81,7 +81,7 @@ u_trace_pipe_context_init(struct u_trace_context *utctx,
+                         delete_flush_data);
+ }
+ 
+-inline void
++void
+ trace_framebuffer_state(struct u_trace *ut, void *cs, const struct pipe_framebuffer_state *pfb)
+ {
+    if (likely(!u_trace_enabled(ut->utctx)))
+diff --git a/src/gallium/drivers/freedreno/a6xx/fd6_context.h b/src/gallium/drivers/freedreno/a6xx/fd6_context.h
+index 1ab3fc0..93cc8fd 100644
+--- a/src/gallium/drivers/freedreno/a6xx/fd6_context.h
++++ b/src/gallium/drivers/freedreno/a6xx/fd6_context.h
+@@ -41,14 +41,17 @@
+ struct fd6_lrz_state {
+    union {
+       struct {
+-         bool enable : 1;
+-         bool write : 1;
+-         bool test : 1;
+-         bool z_bounds_enable : 1;
+-         enum fd_lrz_direction direction : 2;
++         /* XunGpu: uint32_t, not bool/enum: under the MSVC ABI enum bitfields are signed
++          * (z_mode 3 read back as -1 -> 0xffffffff in RB/GRAS_SU_DEPTH_PLANE_CNTL hung RB) and
++          * bitfields of different types are not packed together (val would not cover them). */
++         uint32_t enable : 1;
++         uint32_t write : 1;
++         uint32_t test : 1;
++         uint32_t z_bounds_enable : 1;
++         uint32_t direction : 2;   /* enum fd_lrz_direction */
+ 
+          /* this comes from the fs program state, rather than zsa: */
+-         enum a6xx_ztest_mode z_mode : 2;
++         uint32_t z_mode : 2;      /* enum a6xx_ztest_mode */
+       };
+       uint32_t val : 8;
+    };
+diff --git a/src/gallium/drivers/freedreno/a6xx/fd6_emit.cc b/src/gallium/drivers/freedreno/a6xx/fd6_emit.cc
+index 660b5bd..006dcf8 100644
+--- a/src/gallium/drivers/freedreno/a6xx/fd6_emit.cc
++++ b/src/gallium/drivers/freedreno/a6xx/fd6_emit.cc
+@@ -99,7 +99,7 @@ static enum a6xx_ztest_mode
+ compute_ztest_mode(struct fd6_emit *emit, bool lrz_valid) assert_dt
+ {
+    if (emit->prog->lrz_mask.z_mode != A6XX_INVALID_ZTEST)
+-      return emit->prog->lrz_mask.z_mode;
++      return (enum a6xx_ztest_mode)emit->prog->lrz_mask.z_mode;
+ 
+    struct fd_context *ctx = emit->ctx;
+    struct pipe_framebuffer_state *pfb = &ctx->batch->framebuffer;
+@@ -225,7 +225,7 @@ compute_lrz_state(struct fd6_emit *emit) assert_dt
+     * to the point where the overly-conservative test is incorrect.
+     */
+    if (zsa->base.depth_writemask) {
+-      rsc->lrz_direction = lrz.direction;
++      rsc->lrz_direction = (enum fd_lrz_direction)lrz.direction;
+    }
+ 
+    return lrz;
+@@ -280,9 +280,9 @@ build_lrz(struct fd6_emit *emit) assert_dt
+    }
+    OUT_REG(ring, A6XX_RB_LRZ_CNTL(.enable = lrz.enable, ));
+ 
+-   OUT_REG(ring, A6XX_RB_DEPTH_PLANE_CNTL(.z_mode = lrz.z_mode, ));
++   OUT_REG(ring, A6XX_RB_DEPTH_PLANE_CNTL(.z_mode = (enum a6xx_ztest_mode)lrz.z_mode, ));
+ 
+-   OUT_REG(ring, A6XX_GRAS_SU_DEPTH_PLANE_CNTL(.z_mode = lrz.z_mode, ));
++   OUT_REG(ring, A6XX_GRAS_SU_DEPTH_PLANE_CNTL(.z_mode = (enum a6xx_ztest_mode)lrz.z_mode, ));
+ 
+    return ring;
+ }
+diff --git a/src/gallium/drivers/freedreno/a6xx/fd6_vsc.cc b/src/gallium/drivers/freedreno/a6xx/fd6_vsc.cc
+index ad3374c..329a4b1 100644
+--- a/src/gallium/drivers/freedreno/a6xx/fd6_vsc.cc
++++ b/src/gallium/drivers/freedreno/a6xx/fd6_vsc.cc
+@@ -68,7 +68,7 @@ prim_count(const struct pipe_draw_info *info,
+ {
+    /* MESA_PRIM_COUNT used internally for RECTLIST blits on 3d pipe: */
+    unsigned vtx_per_prim =
+-      (info->mode == MESA_PRIM_COUNT) ? 2 : mesa_vertices_per_prim(info->mode);
++      (info->mode == MESA_PRIM_COUNT) ? 2 : mesa_vertices_per_prim((enum mesa_prim)info->mode);
+    return MAX2(1, (draw->count * info->instance_count) / vtx_per_prim);
+ }
+ 
+diff --git a/src/gallium/drivers/freedreno/freedreno_draw.c b/src/gallium/drivers/freedreno/freedreno_draw.c
+index cce1c81..884be75 100644
+--- a/src/gallium/drivers/freedreno/freedreno_draw.c
++++ b/src/gallium/drivers/freedreno/freedreno_draw.c
+@@ -74,7 +74,8 @@ batch_draw_tracking_for_dirty_bits(struct fd_batch *batch) assert_dt
+    unsigned buffers = 0, restore_buffers = 0;
+ 
+    if (dirty & (FD_DIRTY_FRAMEBUFFER | FD_DIRTY_ZSA)) {
+-      if (fd_depth_enabled(ctx)) {
++      /* XunGpu: D3D10/11 keep depth/stencil enabled with no DSV bound (no test then) */
++      if (fd_depth_enabled(ctx) && pfb->zsbuf) {
+          if (fd_resource(pfb->zsbuf->texture)->valid) {
+             restore_buffers |= FD_BUFFER_DEPTH;
+             /* storing packed d/s depth also stores stencil, so we need
+@@ -94,7 +95,7 @@ batch_draw_tracking_for_dirty_bits(struct fd_batch *batch) assert_dt
+          }
+       }
+ 
+-      if (fd_stencil_enabled(ctx)) {
++      if (fd_stencil_enabled(ctx) && pfb->zsbuf) {
+          if (fd_resource(pfb->zsbuf->texture)->valid) {
+             restore_buffers |= FD_BUFFER_STENCIL;
+             /* storing packed d/s stencil also stores depth, so we need
+diff --git a/src/gallium/drivers/freedreno/freedreno_resource.h b/src/gallium/drivers/freedreno/freedreno_resource.h
+index bbb7ebf..e4fb5e1 100644
+--- a/src/gallium/drivers/freedreno/freedreno_resource.h
++++ b/src/gallium/drivers/freedreno/freedreno_resource.h
+@@ -164,7 +164,7 @@ struct fd_resource {
+     * fdl_layout
+     */
+    bool lrz_valid : 1;
+-   enum fd_lrz_direction lrz_direction : 2;
++   enum fd_lrz_direction lrz_direction : 3; /* XunGpu: signed enum bitfields on MSVC ABI */
+    uint16_t lrz_width; // for lrz clear, does this differ from lrz_pitch?
+    uint16_t lrz_height;
+    uint16_t lrz_pitch;
+diff --git a/src/gallium/drivers/freedreno/freedreno_util.h b/src/gallium/drivers/freedreno/freedreno_util.h
+index 7ff8576..f236535 100644
+--- a/src/gallium/drivers/freedreno/freedreno_util.h
++++ b/src/gallium/drivers/freedreno/freedreno_util.h
+@@ -402,11 +402,9 @@ __OUT_IB5(struct fd_ringbuffer *ring, struct fd_ringbuffer *target)
+  */
+ #define HW_QUERY_BASE_REG REG_AXXX_CP_SCRATCH_REG4
+ 
+-#if MESA_DEBUG
++/* XunGpu bring-up: markers (WFI + CP_SCRATCH write around draws/passes) always on, the KMD
++ * hang dump reads CP_SCRATCH_REG5..7 to locate a hang */
+ #define __EMIT_MARKER 1
+-#else
+-#define __EMIT_MARKER 0
+-#endif
+ 
+ static inline void
+ emit_marker(struct fd_ringbuffer *ring, int scratch_idx)
+diff --git a/src/gallium/frontends/d3d10umd/Adapter.cpp b/src/gallium/frontends/d3d10umd/Adapter.cpp
+index 9078a80..837013e 100644
+--- a/src/gallium/frontends/d3d10umd/Adapter.cpp
++++ b/src/gallium/frontends/d3d10umd/Adapter.cpp
+@@ -104,6 +104,12 @@ OpenAdapter10(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
+ {
+    LOG_ENTRYPOINT();
+ 
++   /* XunGpu: opt-in only while the driver is experimental. Our adapter is DXGI adapter 0, so
++    * without this explorer/DWM render on it and a GPU hang freezes the desktop. */
++   if (GetEnvironmentVariableA("XUNGPU_ENABLE", NULL, 0) == 0) {
++      return E_FAIL;
++   }
++
+    /*
+     * This is checked here and not on the common code because MSDN docs
+     * state that it should be ignored on OpenAdapter10_2.
+@@ -223,6 +229,12 @@ OpenAdapter10_2(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
+ {
+    LOG_ENTRYPOINT();
+ 
++   /* XunGpu: opt-in only while the driver is experimental. Our adapter is DXGI adapter 0, so
++    * without this explorer/DWM render on it and a GPU hang freezes the desktop. */
++   if (GetEnvironmentVariableA("XUNGPU_ENABLE", NULL, 0) == 0) {
++      return E_FAIL;
++   }
++
+    HRESULT hr = OpenAdapterCommon(pOpenData);
+ 
+    if (SUCCEEDED(hr)) {
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index b22f602..8bb09ba 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -155,6 +155,8 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+    pDevice->cso = cso_create_context(pipe, CSO_NO_VBUF);
+ 
+    pDevice->empty_vs = CreateEmptyShader(pDevice, PIPE_SHADER_VERTEX);
++   pDevice->velems_changed = true;
++   pDevice->dss = NULL;              /* XunGpu: current depth-stencil state */   /* XunGpu: bind (empty) vertex elements before the first draw */
+    pDevice->empty_fs = CreateEmptyShader(pDevice, PIPE_SHADER_FRAGMENT);
+ 
+    pipe->bind_vs_state(pipe, pDevice->empty_vs);
+diff --git a/src/gallium/frontends/d3d10umd/Draw.cpp b/src/gallium/frontends/d3d10umd/Draw.cpp
+index 6f651f8..56c10b1 100644
+--- a/src/gallium/frontends/d3d10umd/Draw.cpp
++++ b/src/gallium/frontends/d3d10umd/Draw.cpp
+@@ -64,6 +64,12 @@ update_velems(Device *pDevice)
+       for (unsigned i = 0; i < state->count; i++)
+          state->velems[i].src_stride = pDevice->vertex_strides[state->velems[i].vertex_buffer_index];
+       cso_set_vertex_elements(pDevice->cso, state);
++   } else {
++      /* XunGpu: D3D draws without an input layout (SV_VertexID only) are legal; gallium drivers
++       * (freedreno) need a vertex elements state bound anyway. */
++      struct cso_velems_state empty;
++      memset(&empty, 0, sizeof(empty));
++      cso_set_vertex_elements(pDevice->cso, &empty);
+    }
+ 
+    pDevice->velems_changed = false;
+diff --git a/src/gallium/frontends/d3d10umd/OutputMerger.cpp b/src/gallium/frontends/d3d10umd/OutputMerger.cpp
+index dad1251..dbca5d0 100644
+--- a/src/gallium/frontends/d3d10umd/OutputMerger.cpp
++++ b/src/gallium/frontends/d3d10umd/OutputMerger.cpp
+@@ -40,6 +40,8 @@
+ #include "util/u_framebuffer.h"
+ #include "util/format/u_format.h"
+ 
++static void BindDepthStencil(Device *pDevice);   /* XunGpu */
++
+ 
+ static inline struct pipe_surface *
+ GetPipeRenderTargetView(D3D10DDI_HRENDERTARGETVIEW hRenderTargetView)
+@@ -798,6 +800,7 @@ SetRenderTargets(D3D10DDI_HDEVICE hDevice,                              // IN
+    pDevice->fb.height = height;
+ 
+    pipe->set_framebuffer_state(pipe, &pDevice->fb);
++   BindDepthStencil(pDevice);   /* XunGpu: DSV bound or not changes the depth state variant */
+ }
+ 
+ 
+@@ -964,6 +967,27 @@ CreateDepthStencilState(
+ 
+    pDepthStencilState->handle =
+       pipe->create_depth_stencil_alpha_state(pipe, &state);
++
++   /* D3D: with no depth-stencil view bound there is no depth or stencil test. Gallium drivers
++    * (freedreno) would still enable the RB depth test, so keep a variant with both off. */
++   state.depth_enabled = 0;
++   state.depth_writemask = 0;
++   state.stencil[0].enabled = 0;
++   state.stencil[1].enabled = 0;
++   pDepthStencilState->handle_nozs =
++      pipe->create_depth_stencil_alpha_state(pipe, &state);
++}
++
++/* XunGpu: bind the depth-stencil state variant that matches the bound DSV */
++static void
++BindDepthStencil(Device *pDevice)
++{
++   struct pipe_context *pipe = pDevice->pipe;
++   DepthStencilState *dss = pDevice->dss;
++
++   if (!dss)
++      return;
++   pipe->bind_depth_stencil_alpha_state(pipe, pDevice->fb.zsbuf ? dss->handle : dss->handle_nozs);
+ }
+ 
+ 
+@@ -986,7 +1010,11 @@ DestroyDepthStencilState(D3D10DDI_HDEVICE hDevice,                         // IN
+    struct pipe_context *pipe = CastPipeContext(hDevice);
+    DepthStencilState *pDepthStencilState = CastDepthStencilState(hDepthStencilState);
+ 
++   Device *pDevice = CastDevice(hDevice);
++   if (pDevice->dss == pDepthStencilState)
++      pDevice->dss = NULL;
+    pipe->delete_depth_stencil_alpha_state(pipe, pDepthStencilState->handle);
++   pipe->delete_depth_stencil_alpha_state(pipe, pDepthStencilState->handle_nozs);
+ }
+ 
+ 
+@@ -1014,6 +1042,11 @@ SetDepthStencilState(D3D10DDI_HDEVICE hDevice,           // IN
+    psr.ref_value[0] = StencilRef;
+    psr.ref_value[1] = StencilRef;
+ 
+-   pipe->bind_depth_stencil_alpha_state(pipe, state);
++   Device *pDevice = CastDevice(hDevice);
++   pDevice->dss = CastDepthStencilState(hState);
++   if (pDevice->dss)
++      BindDepthStencil(pDevice);
++   else
++      pipe->bind_depth_stencil_alpha_state(pipe, state);
+    pipe->set_stencil_ref(pipe, psr);
+ }
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index d98792e..19de592 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -93,6 +93,8 @@ struct Device
+    void *empty_fs;
+    void *empty_vs;
+ 
++   struct DepthStencilState *dss;   /* XunGpu: current D3D depth-stencil state */
++
+    enum mesa_prim primitive;
+ 
+    struct pipe_stream_output_target *so_targets[PIPE_MAX_SO_BUFFERS];
+@@ -281,6 +283,7 @@ CastPipeBlendState(D3D10DDI_HBLENDSTATE hBlendState)
+ struct DepthStencilState
+ {
+    void *handle;
++   void *handle_nozs;   /* XunGpu: same state with depth/stencil off, bound while no DSV is set */
+ };
+ 
+ 
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index b8ab9f5..168218b 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -34,6 +34,45 @@
+ #include "softpipe/sp_public.h"
+ #include "sw/gdi/gdi_sw_winsys.h"
+ #include "virgl/gdi/virgl_gdi_public.h"
++#ifdef GALLIUM_FREEDRENO
++#include "xf86drm.h"
++#include "util/xmlconfig.h"
++#include "util/driconf.h"
++#include "pipe/p_screen.h"
++#include "renderonly/renderonly.h"
++#include "compiler/glsl_types.h"
++
++struct pipe_screen *fd_screen_create(int fd, const struct pipe_screen_config *config, struct renderonly *ro);
++
++/* freedreno reads driconf options in fd_screen_create(): give it its defaults */
++static const driOptionDescription fd_driconf[] = {
++#include "freedreno/driinfo_freedreno.h"
++};
++static driOptionCache fd_options;
++static struct pipe_screen_config fd_config;
++
++/* renderonly.c needs libdrm and is not built on Windows; freedreno only calls these when
++ * screen->ro != NULL, and we always pass NULL. */
++void
++renderonly_scanout_destroy(struct renderonly_scanout *scanout, struct renderonly *ro)
++{
++}
++
++struct renderonly_scanout *
++renderonly_create_gpu_import_for_resource(struct pipe_resource *rsc, struct renderonly *ro,
++                                          struct winsys_handle *out_handle)
++{
++   return NULL;
++}
++
++/* XunGpu: DRM ioctls of freedreno travel as escapes through the D3D10 device callbacks */
++static int
++d3d10_fd_escape(void *ctx, void *data, unsigned size)
++{
++   struct gdikmt_device *device = (struct gdikmt_device *)ctx;
++   return device->escape(device, data, size) >= 0 ? 0 : -1;
++}
++#endif
+ 
+ #include "winddk_compat.h"
+ #include <d3dkmthk.h>
+@@ -66,6 +105,23 @@ d3d10_create_screen(struct gdikmt_device* device)
+ #ifdef GALLIUM_VIRGL
+    return virgl_gdi_screen_create(device);
+ #endif
++#ifdef GALLIUM_FREEDRENO
++   {
++      int fd;
++      /* freedreno/NIR need the GLSL type cache; on Linux the GL frontend creates it */
++      glsl_type_singleton_init_or_ref();
++      fd = fd_wddm_open(d3d10_fd_escape, device);
++      if (fd < 0)
++         return NULL;
++      if (!fd_config.options) {
++         driParseOptionInfo(&fd_options, fd_driconf, ARRAY_SIZE(fd_driconf));
++         fd_config.options = &fd_options;
++         fd_config.options_info = &fd_options;
++      }
++      screen = fd_screen_create(fd, &fd_config, NULL);
++      return screen ? debug_screen_wrap(screen) : NULL;
++   }
++#endif
+ 
+ 
+    winsys = gdi_create_sw_winsys(d3d10_gdi_acquire_hdc, d3d10_gdi_release_hdc);
+diff --git a/src/gallium/targets/d3d10umd/meson.build b/src/gallium/targets/d3d10umd/meson.build
+index 686e5f9..d5dce2e 100644
+--- a/src/gallium/targets/d3d10umd/meson.build
++++ b/src/gallium/targets/d3d10umd/meson.build
+@@ -22,7 +22,7 @@ libgallium_d3d10 = shared_library(
+     libgallium, libgalliumvl, libwsgdi
+   ],
+   dependencies : [
+-    dep_ws2_32, idep_nir, driver_swrast, driver_virgl, idep_mesautil
++    dep_ws2_32, idep_nir, driver_swrast, driver_virgl, driver_freedreno, idep_mesautil
+   ],
+   name_prefix: '',
+   install : true,
+diff --git a/src/util/os_mman.h b/src/util/os_mman.h
+index 1567ee7..3368e63 100644
+--- a/src/util/os_mman.h
++++ b/src/util/os_mman.h
+@@ -40,7 +40,7 @@
+ 
+ #include "util/detect_os.h"
+ 
+-#if DETECT_OS_POSIX
++#if DETECT_OS_POSIX || defined(FD_WDDM)
+ #  include <sys/mman.h>
+ #else
+ #  error Unsupported OS
+@@ -67,11 +67,13 @@ extern "C" {
+ static inline int os_munmap(void *addr, size_t length)
+ {
+    /* Copied from configure code generated by AC_SYS_LARGEFILE */
++#ifndef FD_WDDM
+ #define LARGE_OFF_T ((((off_t) 1 << 31) << 31) - 1 + \
+                      (((off_t) 1 << 31) << 31))
+    static_assert(LARGE_OFF_T % 2147483629 == 721 &&
+                  LARGE_OFF_T % 2147483647 == 1, "");
+ #undef LARGE_OFF_T
++#endif
+ 
+    return munmap(addr, length);
+ }
+diff --git a/src/util/u_atomic.h b/src/util/u_atomic.h
+index 6d604a6..97d2a51 100644
+--- a/src/util/u_atomic.h
++++ b/src/util/u_atomic.h
+@@ -22,9 +22,9 @@
+  */
+ #if defined(__sun)
+ #define PIPE_ATOMIC_OS_SOLARIS
+-#elif defined(_MSC_VER)
++#elif defined(_MSC_VER) && !defined(__clang__)
+ #define PIPE_ATOMIC_MSVC_INTRINSIC
+-#elif defined(__GNUC__)
++#elif defined(__GNUC__) || defined(__clang__)
+ #define PIPE_ATOMIC_GCC_INTRINSIC
+ #else
+ #error "Unsupported platform"

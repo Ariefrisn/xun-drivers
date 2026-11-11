@@ -1,0 +1,203 @@
+name: Build drivers
+
+on:
+  push:
+    paths:
+      - "drivers/**"
+      - "tools/audio/**"
+      - "tools/gputest/**"
+      - "tools/deploy/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build drivers (ARM64 Release)
+        run: |
+          msbuild drivers\XunTouch\XunTouch.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
+          if ($LASTEXITCODE) { throw "XunTouch build failed" }
+          msbuild drivers\XunBattery\XunBattery.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
+          if ($LASTEXITCODE) { throw "XunBattery build failed" }
+          msbuild drivers\XunDisplay\XunDisplay.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
+          if ($LASTEXITCODE) { throw "XunDisplay build failed" }
+          msbuild drivers\XunButtons\XunButtons.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
+          if ($LASTEXITCODE) { throw "XunButtons build failed" }
+          msbuild drivers\XunModem\XunModem.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
+          if ($LASTEXITCODE) { throw "XunModem build failed" }
+          msbuild drivers\XunWifi\XunWifi.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
+          if ($LASTEXITCODE) { throw "XunWifi build failed" }
+          msbuild drivers\XunCpu\XunCpu.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
+          if ($LASTEXITCODE) { throw "XunCpu build failed" }
+          msbuild drivers\XunRpm\XunRpm.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
+          if ($LASTEXITCODE) { throw "XunRpm build failed" }
+          msbuild drivers\XunBacklight\XunBacklight.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
+          if ($LASTEXITCODE) { throw "XunBacklight build failed" }
+          msbuild drivers\XunGpu\XunGpu.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
+          if ($LASTEXITCODE) { throw "XunGpu build failed" }
+          msbuild drivers\XunGpuW\XunGpuW.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
+          if ($LASTEXITCODE) { throw "XunGpuW build failed" }
+          msbuild drivers\XunAudio\XunAudio.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
+          if ($LASTEXITCODE) { throw "XunAudio build failed" }
+          msbuild drivers\XunSpeaker\XunSpeaker.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
+          if ($LASTEXITCODE) { throw "XunSpeaker build failed" }
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_arm64
+
+      - name: Build tgputest (user-mode XunGpuW check)
+        shell: pwsh
+        run: |
+          $inc = "C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0"
+          New-Item -ItemType Directory -Force out\tgputest | Out-Null
+          cl /nologo /O2 /W3 /I "$inc\km" tools\gputest\tgputest.c /Fe:out\tgputest\tgputest.exe gdi32.lib
+          if ($LASTEXITCODE) { throw "tgputest build failed" }
+          cl /nologo /O2 /W3 /EHsc tools\gputest\d3dtest.cpp /Fe:out\tgputest\d3dtest.exe d3d11.lib dxgi.lib d3dcompiler.lib
+          if ($LASTEXITCODE) { throw "d3dtest build failed" }
+
+      - name: Build taudio (XunAudio lab tool)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out\taudio | Out-Null
+          cl /nologo /O2 /W3 tools\audio\taudio.c /Fe:out\taudio\taudio.exe
+          if ($LASTEXITCODE) { throw "taudio build failed" }
+          cl /nologo /O2 /W3 /EHsc tools\audio\wasapitest.cpp /Fe:out\taudio\wasapitest.exe ole32.lib
+          if ($LASTEXITCODE) { throw "wasapitest build failed" }
+          cl /nologo /O2 /W3 /EHsc tools\audio\kstest.cpp /Fe:out\taudio\kstest.exe ksuser.lib
+          if ($LASTEXITCODE) { throw "kstest build failed" }
+
+      - name: Package, catalog and test-sign
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $kits = "C:\Program Files (x86)\Windows Kits\10"
+          $ver  = "10.0.26100.0"
+          $bin  = "$kits\bin\$ver"
+          $inf2cat = Get-ChildItem "$kits\bin" -Recurse -Filter Inf2Cat.exe | Select-Object -First 1
+          $devcon = Get-ChildItem "$kits\Tools" -Recurse -Filter devcon.exe -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "arm64" } | Select-Object -First 1
+          # Windows on the phone boots with its clock at 2022: keep the cert valid from 2015
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=xun-woa test signing" -CertStoreLocation Cert:\CurrentUser\My -NotBefore (Get-Date "2015-01-01") -NotAfter (Get-Date "2045-01-01")
+
+          foreach ($name in @("XunTouch", "XunBattery", "XunDisplay", "XunButtons", "XunModem", "XunWifi", "XunCpu", "XunRpm", "XunBacklight", "XunGpu", "XunGpuW", "XunAudio", "XunSpeaker")) {
+            $out = "out\$name"
+            New-Item -ItemType Directory -Force $out | Out-Null
+            Copy-Item "drivers\$name\ARM64\Release\$name.sys" $out
+            Copy-Item "drivers\$name\$name.inf" $out
+
+            & "$bin\x64\stampinf.exe" -f "$out\$name.inf" -d "*" -a "arm64" -v "0.1.${{ github.run_number }}.0" -k $(if ($name -eq "XunSpeaker") { "1.31" } else { "1.15" })
+            if ($LASTEXITCODE) { throw "stampinf $name failed" }
+            & $inf2cat.FullName /driver:"$((Resolve-Path $out).Path)" /os:10_NI_ARM64 /uselocaltime
+            if ($LASTEXITCODE) { throw "inf2cat $name failed" }
+
+            Export-Certificate -Cert $cert -FilePath "$out\xun-woa-test.cer" | Out-Null
+            & "$bin\x64\signtool.exe" sign /fd sha256 /sha1 $cert.Thumbprint /s My "$out\$name.sys" "$out\$name.cat"
+            if ($LASTEXITCODE) { throw "signtool $name failed" }
+
+            if ($devcon) { Copy-Item $devcon.FullName $out } else { Write-Warning "devcon arm64 not found" }
+            if (Test-Path "tools\deploy\install-manual.cmd") { Copy-Item "tools\deploy\install-manual.cmd" $out }
+            if ($name -eq "XunTouch") { Copy-Item "tools\deploy\install-touch.cmd" $out }
+            if ($name -eq "XunGpuW") { Copy-Item "tools\deploy\install-gpuw.cmd" $out }
+            if ($name -eq "XunDisplay") {
+              Copy-Item "tools\deploy\install-display.cmd", "tools\deploy\uninstall-display.cmd", "tools\deploy\xun-brightness.ps1" $out
+            }
+            if ($name -eq "XunBattery") {
+              Copy-Item "tools\deploy\install-battery.cmd", "tools\deploy\install-battery-local.cmd", "tools\deploy\copy-log-battery.cmd" $out
+            }
+            if ($name -eq "XunModem") { Copy-Item "tools\deploy\install-modem.cmd", "tools\deploy\copy-log-modem.cmd" $out }
+            if ($name -eq "XunWifi") { Copy-Item "tools\deploy\install-wifi.cmd", "tools\deploy\copy-log-wifi.cmd" $out }
+            Get-ChildItem $out | Select-Object Name, Length | Format-Table -AutoSize
+          }
+
+      - name: Stage combined XunBundle-arm64
+        shell: pwsh
+        run: |
+          $bundle = "out\bundle"
+          New-Item -ItemType Directory -Force "$bundle\drivers", "$bundle\tools" | Out-Null
+          Copy-Item "out\Xun*" "$bundle\drivers\" -Recurse -Force
+          Copy-Item "out\tgputest" "$bundle\tools\" -Recurse -Force
+          Copy-Item "out\taudio" "$bundle\tools\" -Recurse -Force
+          Copy-Item "tools\deploy\*" $bundle -Recurse -Force
+          Copy-Item "tools\unattend.xml" "$bundle\tools\unattend.xml" -Force
+          Copy-Item "tools\xun-boot.ps1" "$bundle\tools\xun-boot.ps1" -Force
+          Copy-Item "tools\xun-boot.sh" "$bundle\tools\xun-boot.sh" -Force
+          Get-ChildItem $bundle -Depth 2 | Select-Object FullName | Format-Table -AutoSize
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunTouch-arm64
+          path: out/XunTouch
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunBattery-arm64
+          path: out/XunBattery
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunDisplay-arm64
+          path: out/XunDisplay
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunButtons-arm64
+          path: out/XunButtons
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunModem-arm64
+          path: out/XunModem
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunWifi-arm64
+          path: out/XunWifi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunCpu-arm64
+          path: out/XunCpu
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunRpm-arm64
+          path: out/XunRpm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunBacklight-arm64
+          path: out/XunBacklight
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunGpu-arm64
+          path: out/XunGpu
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunGpuW-arm64
+          path: |
+            out/XunGpuW
+            out/tgputest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunAudio-arm64
+          path: |
+            out/XunAudio
+            out/taudio
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunSpeaker-arm64
+          path: out/XunSpeaker
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunBundle-arm64
+          path: out/bundle

@@ -1,0 +1,57 @@
+;
+; XunBacklight.inf - panel brightness of Redmi Pad SE (xun, SM6225): KTZ8866 QUP0 SE1
+; Root-enumerated KMDF driver; level from C:\xun\brightness (0-100).
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+CatalogFile = XunBacklight.cat
+DriverVer   = ; set by stampinf
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+XunBacklight.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%DeviceDesc% = XunBacklight_Device, Root\XunBacklight
+
+[XunBacklight_Device.NT]
+CopyFiles = XunBacklight_CopyFiles
+
+[XunBacklight_CopyFiles]
+XunBacklight.sys
+
+[XunBacklight_Device.NT.Services]
+AddService = XunBacklight, 0x00000002, XunBacklight_Service
+
+[XunBacklight_Service]
+DisplayName   = %ServiceName%
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\XunBacklight.sys
+
+[XunBacklight_Device.NT.Wdf]
+KmdfService = XunBacklight, XunBacklight_WdfSection
+
+[XunBacklight_WdfSection]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+ProviderName     = "xun-woa"
+ManufacturerName = "xun-woa"
+DiskName         = "XunBacklight Installation Disk"
+DeviceDesc       = "Panel Brightness (Redmi Pad SE)"
+ServiceName      = "XunBacklight"
