@@ -514,7 +514,7 @@ static PULONGLONG TableAlloc(PHYSICAL_ADDRESS *Pa)
     PULONGLONG t;
 
     lo.QuadPart = 0;
-    hi.QuadPart = 0xEFFFFFFF;                          /* v0.14: walks/fetches above 4 GB faulted */
+    hi.QuadPart = 0xFFFFFFFF;
     bound.QuadPart = 0;
     t = (PULONGLONG)MmAllocateContiguousMemorySpecifyCache(PAGE_SIZE, lo, hi, bound, MmNonCached);
     if (t != NULL) {
@@ -744,7 +744,7 @@ static BOOLEAN KBufAlloc(KBUF *B, SIZE_T Size)
     PHYSICAL_ADDRESS lo, hi, skip;
 
     lo.QuadPart = 0;
-    hi.QuadPart = 0xEFFFFFFF;                          /* v0.14: walks/fetches above 4 GB faulted */
+    hi.QuadPart = 0xFFFFFFFF;
     skip.QuadPart = 0;
     B->Size = ROUND_TO_PAGES(Size);
     B->Mdl = MmAllocatePagesForMdlEx(lo, hi, skip, B->Size, MmWriteCombined, MM_ALLOCATE_FULLY_REQUIRED);

@@ -55,11 +55,85 @@ index 3c9ae68..9f4120b 100644
        D3DKMT_HANDLE firstAllocation = CastResource(hResources[0])->hAllocation;
  
        /* XUN_ROTATE_REVERSE=1: rotate the other way ([i] takes [i-1]) - experiment */
+diff --git a/src/gallium/frontends/d3d10umd/OutputMerger.cpp b/src/gallium/frontends/d3d10umd/OutputMerger.cpp
+index dffa1e7..8c070c9 100644
+--- a/src/gallium/frontends/d3d10umd/OutputMerger.cpp
++++ b/src/gallium/frontends/d3d10umd/OutputMerger.cpp
+@@ -53,6 +53,7 @@ GetPipeRenderTargetView(D3D10DDI_HRENDERTARGETVIEW hRenderTargetView)
+    // If it is not (resource rotated) then recreate surface
+    struct pipe_surface *currentSurface = pRenderTargetView->surface;
+    Resource *res = pRenderTargetView->resource;
++   if (!currentSurface || !res || !res->resource) return NULL;
+    if (currentSurface->texture != res->resource) {
+       struct pipe_context *pipe = currentSurface->context;
+       struct pipe_surface *newSurface = pipe->create_surface(pipe, res->resource, currentSurface);
+@@ -109,6 +110,11 @@ CreateRenderTargetView(
+    struct pipe_resource *resource = CastPipeResource(pCreateRenderTargetView->hDrvResource);
+    RenderTargetView *pRTView = CastRenderTargetView(hRenderTargetView);
+    pRTView->resource = CastResource(pCreateRenderTargetView->hDrvResource);
++   if (!resource) {
++      pRTView->surface = NULL;
++      SetError(hDevice, E_INVALIDARG);
++      return;
++   }
+ 
+    struct pipe_surface desc;
+ 
+@@ -202,6 +208,7 @@ ClearRenderTargetView(D3D10DDI_HDEVICE hDevice,                      // IN
+ 
+    struct pipe_context *pipe = CastPipeContext(hDevice);
+    struct pipe_surface *surface = GetPipeRenderTargetView(hRenderTargetView);
++   if (!surface) return;
+    union pipe_color_union clear_color;
+ 
+    XunStripsRestore(CastDevice(hDevice));
+@@ -312,6 +319,11 @@ CreateDepthStencilView(
+    struct pipe_context *pipe = CastPipeContext(hDevice);
+    struct pipe_resource *resource = CastPipeResource(pCreateDepthStencilView->hDrvResource);
+    DepthStencilView *pDSView = CastDepthStencilView(hDepthStencilView);
++   if (!resource) {
++      pDSView->surface = NULL;
++      SetError(hDevice, E_INVALIDARG);
++      return;
++   }
+ 
+    struct pipe_surface desc;
+ 
+@@ -396,6 +408,7 @@ ClearDepthStencilView(D3D10DDI_HDEVICE hDevice,                      // IN
+ 
+    struct pipe_context *pipe = CastPipeContext(hDevice);
+    struct pipe_surface *surface = CastPipeDepthStencilView(hDepthStencilView);
++   if (!surface) return;
+ 
+    unsigned flags = 0;
+    if (Flags & D3D10_DDI_CLEAR_DEPTH) {
 diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
-index d8c91be..4e20f1a 100644
+index 534e8f6..f6868bd 100644
 --- a/src/gallium/frontends/d3d10umd/Resource.cpp
 +++ b/src/gallium/frontends/d3d10umd/Resource.cpp
-@@ -488,11 +488,9 @@ OpenResource(D3D10DDI_HDEVICE hDevice,                            // IN
+@@ -352,7 +352,7 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+    }
+ 
+    pResource->resource = screen->resource_create(screen, &templat);
+-   if (!pResource) {
++   if (!pResource->resource) {
+       DebugPrintf("%s: failed to create resource\n", __func__);
+       SetError(hDevice, E_OUTOFMEMORY);
+       goto unlock;
+@@ -364,7 +364,12 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+ 
+    if (pResource->resource && templat.target != PIPE_BUFFER && XunWddmWanted(pCreateResource)) {
+       if (FAILED(XunWddmCreateAllocation(device, pResource, pCreateResource, xunNoScanout))) {
++         free(pResource->transfers);
++         pResource->transfers = NULL;
++         pResource->NumSubResources = 0;
++         pipe_resource_reference(&pResource->resource, NULL);
+          SetError(hDevice, E_OUTOFMEMORY);
++         goto unlock;
+       }
+    }
+ 
+@@ -495,11 +500,9 @@ OpenResource(D3D10DDI_HDEVICE hDevice,                            // IN
     whandle.type = WINSYS_HANDLE_TYPE_WIN32_HANDLE;
     whandle.handle = (HANDLE)pOpenResource->hKMResource.handle;
     
@@ -72,3 +146,39 @@ index d8c91be..4e20f1a 100644
     
     if (!pResource->resource) {
        SetError(hDevice, E_OUTOFMEMORY);
+diff --git a/src/gallium/frontends/d3d10umd/Shader.cpp b/src/gallium/frontends/d3d10umd/Shader.cpp
+index 80cffa9..f64d396 100644
+--- a/src/gallium/frontends/d3d10umd/Shader.cpp
++++ b/src/gallium/frontends/d3d10umd/Shader.cpp
+@@ -58,6 +58,7 @@ GetPipeShaderResourceView(D3D10DDI_HSHADERRESOURCEVIEW hRenderTargetView)
+    // If it is not (resource rotated) then recreate view
+    struct pipe_sampler_view *currentSurface = pShaderResourceView->handle;
+    Resource *res = pShaderResourceView->resource;
++   if (!currentSurface || !res || !res->resource) return NULL;
+    if (currentSurface->texture != res->resource) {
+       struct pipe_context *pipe = currentSurface->context;
+       struct pipe_sampler_view *newView = pipe->create_sampler_view(pipe, res->resource, currentSurface);
+@@ -1244,6 +1245,11 @@ CreateShaderResourceView(
+    struct pipe_sampler_view desc;
+    memset(&desc, 0, sizeof desc);
+    resource = CastPipeResource(pCreateSRView->hDrvResource);
++   if (!resource) {
++      pSRView->handle = NULL;
++      SetError(hDevice, E_INVALIDARG);
++      return;
++   }
+    format = FormatTranslate(pCreateSRView->Format, false);
+ 
+    u_sampler_view_default_template(&desc,
+@@ -1326,6 +1332,11 @@ CreateShaderResourceView1(
+    struct pipe_sampler_view desc;
+    memset(&desc, 0, sizeof desc);
+    resource = CastPipeResource(pCreateSRView->hDrvResource);
++   if (!resource) {
++      pSRView->handle = NULL;
++      SetError(hDevice, E_INVALIDARG);
++      return;
++   }
+    format = FormatTranslate(pCreateSRView->Format, false);
+ 
+    u_sampler_view_default_template(&desc,

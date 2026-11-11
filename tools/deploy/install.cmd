@@ -3,6 +3,19 @@ setlocal enabledelayedexpansion
 set L=C:\xun\install.log
 if exist C:\xun\installed.flag exit /b 0
 if not exist C:\xun mkdir C:\xun
+set _GOT_LOCK=0
+for /L %%w in (1,1,45) do (
+    if exist C:\xun\installed.flag exit /b 0
+    mkdir C:\xun\install.lock 2>nul && (set _GOT_LOCK=1 & goto :xun_got_lock)
+    ping -n 2 127.0.0.1 >nul
+)
+rmdir /s /q C:\xun\install.lock 2>nul
+mkdir C:\xun\install.lock 2>nul && set _GOT_LOCK=1
+:xun_got_lock
+if exist C:\xun\installed.flag (
+    if !_GOT_LOCK! equ 1 rmdir /s /q C:\xun\install.lock 2>nul
+    exit /b 0
+)
 echo [%date% %time%] xun auto-install start >> "%L%"
 
 set DRV=C:\xun\drivers
@@ -92,6 +105,14 @@ for %%d in (XunAudio XunSpeaker) do (
 
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Scheduler" /v EnablePreemption /t REG_DWORD /d 0 /f >> "%L%" 2>&1
 
+powershell -NoProfile -Command "Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Enum\ROOT\SYSTEM' -ErrorAction SilentlyContinue | ForEach-Object { $h = (Get-ItemProperty $_.PSPath -Name HardwareID -ErrorAction SilentlyContinue).HardwareID; if ($h -and $h[0] -like 'ROOT\Xun*') { [pscustomobject]@{ Name=$_.PSChildName; Hw=$h[0] } } } | Group-Object Hw | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Group | Sort-Object Name | Select-Object -Skip 1 | ForEach-Object { & pnputil /remove-device ('ROOT\SYSTEM\' + $_.Name) } }" >> "%L%" 2>&1
+
+powercfg /change monitor-timeout-ac 0 >> "%L%" 2>&1
+powercfg /change monitor-timeout-dc 0 >> "%L%" 2>&1
+powercfg /change standby-timeout-ac 0 >> "%L%" 2>&1
+powercfg /change standby-timeout-dc 0 >> "%L%" 2>&1
+
 echo ok > C:\xun\installed.flag
+if !_GOT_LOCK! equ 1 rmdir /s /q C:\xun\install.lock 2>nul
 echo [%date% %time%] xun auto-install done >> "%L%"
 exit /b 0

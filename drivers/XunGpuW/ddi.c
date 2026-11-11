@@ -244,6 +244,7 @@ static NTSTATUS TgStartDevice(const PVOID Ctx, PDXGK_START_INFO StartInfo, PDXGK
     *NumSources = 1;                                     /* step C2: the panel */
     *NumChildren = 1;
     a->Started = TRUE;
+    GuardFile(FALSE, TRUE);
     LogPrint("StartDevice: display adapter (1 source, 1 child), GPU starts on the first escape\n");
     return STATUS_SUCCESS;
 }
