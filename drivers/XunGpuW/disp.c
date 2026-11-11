@@ -43,14 +43,15 @@ static TGPU_ALLOCATION * volatile g_ScanCur;    /* primary being "scanned out" *
 /* direct scanout: the bootloader's MDP path is VIG0 -> LM0 -> CTL0 -> INTF1 -> DSI0, fetching the
    GOP framebuffer 0x5C000000 (stride 4800); the MDP SMMU context (SID 0x420 -> CB3) has translation off,
    so VIG0 can fetch any physical address. Flipping to a BO-backed primary = new SRC0_ADDR/YSTRIDE0 +
-   SRC_FORMAT (0xC000 = 180-deg panel mount flip) + CTL flush (double-buffered, latched at vsync).
+   SRC_OP_MODE (0x6000 = 180-deg panel mount flip) + CTL flush (double-buffered, latched at vsync).
    C:\xun\gpuw.nodirect disables direct scanout; C:\xun\disp.noflip disables the 180-deg flip. */
 #define MDP_VIG0            0x5000
 #define SSPP_SRC0_ADDR      0x14
 #define SSPP_SRC_YSTRIDE0   0x24
 #define SSPP_SRC_FORMAT     0x30
-#define MDP_FLIP_LR         (1u << 14)
-#define MDP_FLIP_UD         (1u << 15)
+#define SSPP_SRC_OP_MODE    0x38
+#define MDP_FLIP_LR         (1u << 13)
+#define MDP_FLIP_UD         (1u << 14)
 #define MDP_FLIP_180        (MDP_FLIP_LR | MDP_FLIP_UD)
 #define MDP_CTL0            0x2000
 #define CTL_FLUSH           0x18
@@ -60,15 +61,16 @@ static volatile UCHAR *g_Mdp;
 static BOOLEAN g_DirectOk;                      /* mapped and not disabled */
 static BOOLEAN g_DispFlip = TRUE;               /* 180-deg physical mount compensation */
 static volatile LONG g_DirectActive;            /* VIG0 currently fetches a BO */
-static ULONG g_FbAddr, g_FbStride, g_FbFormat;  /* bootloader values, restored on fallback/stop */
+static ULONG g_FbAddr, g_FbStride, g_FbFormat, g_FbOpMode; /* bootloader values, restored on fallback/stop */
 static ULONG g_DirectFlips;
 
 static VOID MdpScanFrom(ULONG Pa, ULONG Stride, BOOLEAN Flip)
 {
-    ULONG fmt = g_DispFlip ? ((g_FbFormat & ~MDP_FLIP_180) | (Flip ? MDP_FLIP_180 : 0)) : g_FbFormat;
+    ULONG op = g_DispFlip ? ((g_FbOpMode & ~MDP_FLIP_180) | (Flip ? MDP_FLIP_180 : 0)) : g_FbOpMode;
     WRITE_REGISTER_ULONG((volatile ULONG *)(g_Mdp + MDP_VIG0 + SSPP_SRC0_ADDR), Pa);
     WRITE_REGISTER_ULONG((volatile ULONG *)(g_Mdp + MDP_VIG0 + SSPP_SRC_YSTRIDE0), Stride);
-    WRITE_REGISTER_ULONG((volatile ULONG *)(g_Mdp + MDP_VIG0 + SSPP_SRC_FORMAT), fmt);
+    WRITE_REGISTER_ULONG((volatile ULONG *)(g_Mdp + MDP_VIG0 + SSPP_SRC_FORMAT), g_FbFormat);
+    WRITE_REGISTER_ULONG((volatile ULONG *)(g_Mdp + MDP_VIG0 + SSPP_SRC_OP_MODE), op);
     WRITE_REGISTER_ULONG((volatile ULONG *)(g_Mdp + MDP_CTL0 + CTL_FLUSH), CTL_FLUSH_VIG0 | CTL_FLUSH_CTL);
 }
 
@@ -604,10 +606,11 @@ NTSTATUS DispStart(PDXGKRNL_INTERFACE Dxgk)
             g_FbAddr = READ_REGISTER_ULONG((volatile ULONG *)(g_Mdp + MDP_VIG0 + SSPP_SRC0_ADDR));
             g_FbStride = READ_REGISTER_ULONG((volatile ULONG *)(g_Mdp + MDP_VIG0 + SSPP_SRC_YSTRIDE0));
             g_FbFormat = READ_REGISTER_ULONG((volatile ULONG *)(g_Mdp + MDP_VIG0 + SSPP_SRC_FORMAT));
+            g_FbOpMode = READ_REGISTER_ULONG((volatile ULONG *)(g_Mdp + MDP_VIG0 + SSPP_SRC_OP_MODE));
             g_DirectOk = !off && g_FbAddr == (ULONG)g_Post.PhysicAddress.QuadPart && g_FbStride == g_Post.Pitch;
         }
-        LogPrint("direct scanout: %s (VIG0 addr %08x stride %u fmt %08x%s)\n", g_DirectOk ? "on" : "off",
-                 g_FbAddr, g_FbStride, g_FbFormat, off ? ", gpuw.nodirect" : "");
+        LogPrint("direct scanout: %s (VIG0 addr %08x stride %u fmt %08x op %08x%s)\n", g_DirectOk ? "on" : "off",
+                 g_FbAddr, g_FbStride, g_FbFormat, g_FbOpMode, off ? ", gpuw.nodirect" : "");
     }
 
     g_NextVsync = (LONG64)KeQueryInterruptTime() + VSYNC_PERIOD;
@@ -1107,7 +1110,7 @@ static volatile UCHAR *g_Dsi;
 static PUCHAR g_BlVa;
 static PHYSICAL_ADDRESS g_BlPa;
 static UCHAR g_Brightness = 80;
-static BOOLEAN g_KtzOn = TRUE;
+static BOOLEAN g_KtzOn = FALSE;
 static KMUTEX g_BlLock;
 
 static ULONG DsiRd(ULONG Off) { return READ_REGISTER_ULONG((volatile ULONG *)(g_Dsi + Off)); }
@@ -1184,7 +1187,7 @@ static BOOLEAN BlApply(UCHAR Pct, BOOLEAN On)
 {
     ULONG level = On ? ((ULONG)Pct * 0x7FF / 100) : 0;
     BOOLEAN done = FALSE, forceDcs = DispFileExists(L"\\??\\C:\\xun\\bl.dcs");
-    static BOOLEAN ktzWarned;
+    static BOOLEAN ktzWarned, ktzOkLogged;
 
     if (On && Pct > 0 && level < 16) {
         level = 16;
@@ -1198,31 +1201,52 @@ static BOOLEAN BlApply(UCHAR Pct, BOOLEAN On)
                    XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x98);
             g_KtzOn = FALSE;
         } else {
-            XunKtzSetHwen(&g_Ktz);
-            if (!g_KtzOn) {
-                LARGE_INTEGER delay;
-                XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9C);
-                delay.QuadPart = -50000LL;
-                KeDelayExecutionThread(KernelMode, FALSE, &delay);
-                XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9E);
-                g_KtzOn = TRUE;
+            BOOLEAN chipOk = XunKtzInitChip(&g_Ktz);
+            if (chipOk && !g_KtzOn) {
+                chipOk = XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9C);
+                XunKtzDelayUs(5000);
+                chipOk = chipOk && XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9E);
+                if (chipOk) {
+                    g_KtzOn = TRUE;
+                }
             }
-            done = XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_LSB, (UCHAR)(level & 0x7)) &&
-                   XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_MSB, (UCHAR)((level >> 3) & 0xFF));
+            if (chipOk) {
+                done = XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_LSB, (UCHAR)(level & 0x7)) &&
+                       XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_MSB, (UCHAR)((level >> 3) & 0xFF));
+            }
+            if (done && !ktzOkLogged) {
+                UCHAR id = 0, cfg1 = 0, en = 0;
+                ktzOkLogged = TRUE;
+                XunKtzReadRegAddr(&g_Ktz, XUN_KTZ_I2C_ADDR, XUN_KTZ_REG_DEV_ID, &id);
+                XunKtzReadRegAddr(&g_Ktz, XUN_KTZ_I2C_ADDR, XUN_KTZ_REG_BL_CFG1, &cfg1);
+                XunKtzReadRegAddr(&g_Ktz, XUN_KTZ_I2C_ADDR, XUN_KTZ_REG_BL_EN, &en);
+                LogPrint("brightness: KTZ8866 QUP0 SE1 ok (hwen %08x/%08x->%08x/%08x id=%02x cfg1=%02x en=%02x level=%03x)\n",
+                         g_Ktz.HwenBeforeCtl, g_Ktz.HwenBeforeIo,
+                         g_Ktz.HwenAfterCtl, g_Ktz.HwenAfterIo, id, cfg1, en, level);
+            }
+        }
+        if (!done && !ktzWarned) {
+            ULONG ktzIrq = g_Ktz.LastIrq;
+            UCHAR chg = 0, wusb = 0, ktz = 0;
+            BOOLEAN chgOk, wusbOk, ktzOk;
+            ktzWarned = TRUE;
+            chgOk = XunKtzReadRegAddr(&g_Ktz, 0x6A, 0x03, &chg);
+            wusbOk = XunKtzReadRegAddr(&g_Ktz, 0x60, 0x07, &wusb);
+            ktzOk = XunKtzReadRegAddr(&g_Ktz, XUN_KTZ_I2C_ADDR, XUN_KTZ_REG_DEV_ID, &ktz);
+            LogPrint("brightness: KTZ8866 QUP0 SE1 failed (fw=%08x cbcr=%08x irq=%08x hwen=%08x/%08x->%08x/%08x probe 6A=%u:%02x 60=%u:%02x 11=%u:%02x)\n",
+                     g_Ktz.LastFw, g_Ktz.LastCbcr, ktzIrq,
+                     g_Ktz.HwenBeforeCtl, g_Ktz.HwenBeforeIo,
+                     g_Ktz.HwenAfterCtl, g_Ktz.HwenAfterIo,
+                     chgOk, chg, wusbOk, wusb, ktzOk, ktz);
         }
         XunQupLockRelease(&g_BlQupLock);
-        if (!done && !ktzWarned) {
-            ktzWarned = TRUE;
-            LogPrint("brightness: KTZ8866 QUP0 SE1 failed (fw=%08x cbcr=%08x irq=%08x), trying DCS fallback\n",
-                     g_Ktz.LastFw, g_Ktz.LastCbcr, g_Ktz.LastIrq);
-        }
     }
-    if (forceDcs || (!done && On && Pct > 0)) {
+    if (forceDcs && On && Pct > 0) {
         UCHAR cmd[3];
         ULONG dcs = (On && level < 1) ? 1 : level;
         cmd[0] = 0x51;
-        cmd[1] = (UCHAR)(dcs >> 8);
-        cmd[2] = (UCHAR)dcs;
+        cmd[1] = (UCHAR)((dcs >> 3) & 0xFF);
+        cmd[2] = (UCHAR)(dcs & 0x7);
         done = DsiDcsLong(cmd, sizeof(cmd));
     }
     KeReleaseMutex(&g_BlLock, FALSE);

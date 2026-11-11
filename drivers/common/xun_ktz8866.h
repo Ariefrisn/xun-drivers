@@ -20,9 +20,16 @@
 #define XUN_KTZ_QUP0_SE1_PA         0x04A84000ULL
 
 #define XUN_KTZ_I2C_ADDR            0x11
+#define XUN_KTZ_REG_DEV_ID          0x01
+#define XUN_KTZ_REG_BL_CFG1         0x02
+#define XUN_KTZ_REG_BL_RAMP         0x03
 #define XUN_KTZ_REG_BL_LSB          0x04
 #define XUN_KTZ_REG_BL_MSB          0x05
+#define XUN_KTZ_REG_PWM_CFG         0x08
 #define XUN_KTZ_REG_BL_EN           0x09
+#define XUN_KTZ_REG_OPT1            0x0C
+#define XUN_KTZ_REG_OPT2            0x0D
+#define XUN_KTZ_REG_OPT3            0x0E
 
 #define XUN_KTZ_GENI_FORCE_DEF      0x20
 #define XUN_KTZ_GENI_OUTPUT_CTRL    0x24
@@ -36,6 +43,7 @@
 #define XUN_KTZ_SE_TX_PACK0         0x260
 #define XUN_KTZ_SE_TX_PACK1         0x264
 #define XUN_KTZ_SE_I2C_TX_LEN       0x26C
+#define XUN_KTZ_SE_I2C_RX_LEN       0x270
 #define XUN_KTZ_SE_I2C_SCL_CNT      0x278
 #define XUN_KTZ_SE_RX_PACK0         0x284
 #define XUN_KTZ_SE_RX_PACK1         0x288
@@ -46,6 +54,10 @@
 #define XUN_KTZ_SE_M_IRQ_CLEAR      0x618
 #define XUN_KTZ_SE_S_IRQ_CLEAR      0x648
 #define XUN_KTZ_SE_TX_FIFOn         0x700
+#define XUN_KTZ_SE_RX_FIFOn         0x780
+#define XUN_KTZ_SE_RX_FIFO_STATUS   0x804
+#define XUN_KTZ_SE_RX_WM            0x810
+#define XUN_KTZ_SE_RX_RFR_WM        0x814
 #define XUN_KTZ_SE_DMA_TX_CLR       0xC44
 #define XUN_KTZ_SE_DMA_RX_CLR       0xD44
 #define XUN_KTZ_SE_GSI_EVENT_EN     0xE18
@@ -59,9 +71,15 @@ typedef struct _XUN_KTZ_BUS {
     volatile UCHAR *Se1;
     volatile UCHAR *Hwen;
     BOOLEAN         Se1Ready;
+    BOOLEAN         HwenReady;
+    BOOLEAN         ChipInit;
     ULONG           LastFw;
     ULONG           LastCbcr;
     ULONG           LastIrq;
+    ULONG           HwenBeforeCtl;
+    ULONG           HwenBeforeIo;
+    ULONG           HwenAfterCtl;
+    ULONG           HwenAfterIo;
 } XUN_KTZ_BUS;
 
 static __inline ULONG XunKtzRd(volatile UCHAR *B, ULONG Off)
@@ -162,57 +180,75 @@ static __inline BOOLEAN XunKtzEnsureSe1(_Inout_ XUN_KTZ_BUS *B)
     if (!B->Se1Ready || XunKtzRd(B->Se1, XUN_KTZ_SE_TX_PACK0) == 0) {
         ULONG cfg[4], idx = 7, cfg0, cfg1;
 
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_GSI_EVENT_EN, 0);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_M_IRQ_CLEAR, 0xFFFFFFFF);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_S_IRQ_CLEAR, 0xFFFFFFFF);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_DMA_TX_CLR, 0xFFFFFFFF);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_DMA_RX_CLR, 0xFFFFFFFF);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_GENI_CGC_CTRL, XunKtzRd(B->Se1, XUN_KTZ_GENI_CGC_CTRL) | 0x7F);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_GENI_OUTPUT_CTRL, 0x7F);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_GENI_FORCE_DEF, 1);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_IRQ_EN, XunKtzRd(B->Se1, XUN_KTZ_SE_IRQ_EN) | (1u << 2) | (1u << 3));
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_GENI_DMA_MODE_EN, XunKtzRd(B->Se1, XUN_KTZ_SE_GENI_DMA_MODE_EN) & ~1u);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_M_IRQ_EN,
-                     XunKtzRd(B->Se1, XUN_KTZ_SE_M_IRQ_EN) | XUN_KTZ_M_CMD_DONE | XUN_KTZ_M_ERR_MASK | (1u << 26) | (1u << 27));
-        for (i = 0; i < 4; i++) {
-            cfg[i] = (idx << 5) | (1u << 4) | (7u << 1);
-            idx += 8;
-        }
-        cfg[3] |= 1u;
-        cfg0 = cfg[0] | (cfg[1] << 10);
-        cfg1 = cfg[2] | (cfg[3] << 10);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_TX_PACK0, cfg0);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_TX_PACK1, cfg1);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_RX_PACK0, cfg0);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_RX_PACK1, cfg1);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_GENI_BYTE_GRAN, 0);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_GENI_CLK_SEL, clkSel);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_GENI_SER_M_CLK_CFG, (2u << 4) | 1u);
-        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_I2C_SCL_CNT, (5u << 20) | (12u << 10) | 24u);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_GSI_EVENT_EN, 0);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_M_IRQ_CLEAR, 0xFFFFFFFF);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_S_IRQ_CLEAR, 0xFFFFFFFF);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_DMA_TX_CLR, 0xFFFFFFFF);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_DMA_RX_CLR, 0xFFFFFFFF);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_GENI_CGC_CTRL, XunKtzRd(B->Se1, XUN_KTZ_GENI_CGC_CTRL) | 0x7F);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_GENI_OUTPUT_CTRL, 0x7F);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_GENI_FORCE_DEF, 1);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_IRQ_EN, XunKtzRd(B->Se1, XUN_KTZ_SE_IRQ_EN) | (1u << 2) | (1u << 3));
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_GENI_DMA_MODE_EN, XunKtzRd(B->Se1, XUN_KTZ_SE_GENI_DMA_MODE_EN) & ~1u);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_RX_WM, 15);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_RX_RFR_WM, 16);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_M_IRQ_EN,
+                 XunKtzRd(B->Se1, XUN_KTZ_SE_M_IRQ_EN) | XUN_KTZ_M_CMD_DONE | XUN_KTZ_M_ERR_MASK | (1u << 26) | (1u << 27));
+    for (i = 0; i < 4; i++) {
+        cfg[i] = (idx << 5) | (1u << 4) | (7u << 1);
+        idx += 8;
+    }
+    cfg[3] |= 1u;
+    cfg0 = cfg[0] | (cfg[1] << 10);
+    cfg1 = cfg[2] | (cfg[3] << 10);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_TX_PACK0, cfg0);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_TX_PACK1, cfg1);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_RX_PACK0, cfg0);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_RX_PACK1, cfg1);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_GENI_BYTE_GRAN, 0);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_GENI_CLK_SEL, clkSel);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_GENI_SER_M_CLK_CFG, (2u << 4) | 1u);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_I2C_SCL_CNT, (5u << 20) | (12u << 10) | 24u);
     }
     B->Se1Ready = TRUE;
     return TRUE;
 }
 
-static __inline VOID XunKtzSetHwen(_In_ XUN_KTZ_BUS *B)
+static __inline VOID XunKtzDelayUs(_In_ ULONG Us)
 {
-    if (B->Hwen != NULL) {
-        XunKtzWrMmio(B->Hwen, 0x0, (1u << 9));
-        XunKtzWrMmio(B->Hwen, 0x4, 0x2);
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
+        LARGE_INTEGER d;
+        d.QuadPart = -(LONGLONG)Us * 10LL;
+        KeDelayExecutionThread(KernelMode, FALSE, &d);
+    } else {
+        KeStallExecutionProcessor(Us);
     }
 }
 
-static __inline BOOLEAN XunKtzWriteReg(_Inout_ XUN_KTZ_BUS *B, _In_ UCHAR Reg, _In_ UCHAR Val)
+static __inline VOID XunKtzSetHwen(_Inout_ XUN_KTZ_BUS *B)
+{
+    if (B->Hwen != NULL) {
+        ULONG ctl = XunKtzRd(B->Hwen, 0x0);
+        ULONG io = XunKtzRd(B->Hwen, 0x4);
+        BOOLEAN needWait = !B->HwenReady || (ctl & (1u << 9)) == 0 || (io & 0x2u) == 0;
+        B->HwenBeforeCtl = ctl;
+        B->HwenBeforeIo = io;
+        /* Set OUT=1 before OE=1 so HWEN never glitches low and resets KTZ8866. */
+        XunKtzWrMmio(B->Hwen, 0x4, io | 0x2u);
+        XunKtzWrMmio(B->Hwen, 0x0, (1u << 9));
+        B->HwenAfterCtl = XunKtzRd(B->Hwen, 0x0);
+        B->HwenAfterIo = XunKtzRd(B->Hwen, 0x4);
+        if (needWait) {
+            XunKtzDelayUs(4500);
+        }
+        B->HwenReady = TRUE;
+    }
+}
+
+static __inline BOOLEAN XunKtzWaitDone(_Inout_ XUN_KTZ_BUS *B)
 {
     ULONG i, st = 0;
 
-    if (!XunKtzEnsureSe1(B)) {
-        return FALSE;
-    }
-    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_M_IRQ_CLEAR, 0xFFFFFFFF);
-    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_I2C_TX_LEN, 2);
-    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_M_CMD0, (1u << 27) | ((ULONG)XUN_KTZ_I2C_ADDR << 9));
-    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_TX_FIFOn, (ULONG)Reg | ((ULONG)Val << 8));
     for (i = 0; i < 20000; i++) {
         st = XunKtzRd(B->Se1, XUN_KTZ_SE_M_IRQ_STATUS);
         if (st & (XUN_KTZ_M_CMD_DONE | XUN_KTZ_M_ERR_MASK)) {
@@ -239,3 +275,86 @@ static __inline BOOLEAN XunKtzWriteReg(_Inout_ XUN_KTZ_BUS *B, _In_ UCHAR Reg, _
     }
     return TRUE;
 }
+
+static __inline BOOLEAN XunKtzWriteRegAddr(_Inout_ XUN_KTZ_BUS *B, _In_ UCHAR Addr, _In_ UCHAR Reg, _In_ UCHAR Val)
+{
+    ULONG attempt;
+
+    if (!XunKtzEnsureSe1(B)) {
+        return FALSE;
+    }
+    for (attempt = 0; attempt < 5; attempt++) {
+        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_M_IRQ_CLEAR, 0xFFFFFFFF);
+        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_I2C_TX_LEN, 2);
+        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_M_CMD0, (1u << 27) | ((ULONG)Addr << 9));
+        XunKtzWrMmio(B->Se1, XUN_KTZ_SE_TX_FIFOn, (ULONG)Reg | ((ULONG)Val << 8));
+        if (XunKtzWaitDone(B)) {
+            return TRUE;
+        }
+        KeStallExecutionProcessor(200);
+    }
+    return FALSE;
+}
+
+static __inline BOOLEAN XunKtzWriteReg(_Inout_ XUN_KTZ_BUS *B, _In_ UCHAR Reg, _In_ UCHAR Val)
+{
+    return XunKtzWriteRegAddr(B, XUN_KTZ_I2C_ADDR, Reg, Val);
+}
+
+static __inline BOOLEAN XunKtzReadRegAddr(_Inout_ XUN_KTZ_BUS *B, _In_ UCHAR Addr, _In_ UCHAR Reg, _Out_ PUCHAR Val)
+{
+    ULONG i, w, st;
+
+    *Val = 0;
+    if (!XunKtzEnsureSe1(B)) {
+        return FALSE;
+    }
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_M_IRQ_CLEAR, 0xFFFFFFFF);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_I2C_TX_LEN, 1);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_M_CMD0, (1u << 27) | ((ULONG)Addr << 9) | (1u << 2));
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_TX_FIFOn, (ULONG)Reg);
+    if (!XunKtzWaitDone(B)) {
+        return FALSE;
+    }
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_M_IRQ_CLEAR, 0xFFFFFFFF);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_I2C_RX_LEN, 1);
+    XunKtzWrMmio(B->Se1, XUN_KTZ_SE_M_CMD0, (2u << 27) | ((ULONG)Addr << 9));
+    for (i = 0; i < 20000; i++) {
+        w = XunKtzRd(B->Se1, XUN_KTZ_SE_RX_FIFO_STATUS) & 0x01FFFFFFu;
+        st = XunKtzRd(B->Se1, XUN_KTZ_SE_M_IRQ_STATUS);
+        if (w != 0 || (st & XUN_KTZ_M_ERR_MASK)) {
+            break;
+        }
+        KeStallExecutionProcessor(1);
+    }
+    if ((XunKtzRd(B->Se1, XUN_KTZ_SE_RX_FIFO_STATUS) & 0x01FFFFFFu) != 0) {
+        *Val = (UCHAR)(XunKtzRd(B->Se1, XUN_KTZ_SE_RX_FIFOn) & 0xFFu);
+    }
+    return XunKtzWaitDone(B);
+}
+
+static __inline BOOLEAN XunKtzInitChip(_Inout_ XUN_KTZ_BUS *B)
+{
+    XunKtzSetHwen(B);
+    if (B->ChipInit) {
+        return TRUE;
+    }
+    if (!XunKtzWriteReg(B, XUN_KTZ_REG_OPT1, 0x30) ||
+        !XunKtzWriteReg(B, XUN_KTZ_REG_OPT2, 0x28) ||
+        !XunKtzWriteReg(B, XUN_KTZ_REG_OPT3, 0x28) ||
+        !XunKtzWriteReg(B, XUN_KTZ_REG_BL_EN, 0x9C)) {
+        return FALSE;
+    }
+    XunKtzDelayUs(5000);
+    if (!XunKtzWriteReg(B, XUN_KTZ_REG_BL_EN, 0x9E)) {
+        return FALSE;
+    }
+    XunKtzDelayUs(10000);
+    if (!XunKtzWriteReg(B, XUN_KTZ_REG_BL_RAMP, 0xCD) ||
+        !XunKtzWriteReg(B, XUN_KTZ_REG_PWM_CFG, 0x5F)) {
+        return FALSE;
+    }
+    B->ChipInit = TRUE;
+    return TRUE;
+}
+

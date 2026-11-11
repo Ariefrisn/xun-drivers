@@ -179,31 +179,35 @@ static BOOLEAN SetLevel(PDEVICE_CONTEXT C, LONG Pct)
                  XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_EN, 0x98);
             C->KtzOn = FALSE;
         } else {
-            XunKtzSetHwen(&C->Ktz);
-            if (!C->KtzOn) {
-                LARGE_INTEGER d;
-                XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_EN, 0x9C);
-                d.QuadPart = -50000LL;
-                KeDelayExecutionThread(KernelMode, FALSE, &d);
-                XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_EN, 0x9E);
-                C->KtzOn = TRUE;
+            BOOLEAN chipOk = XunKtzInitChip(&C->Ktz);
+            if (chipOk && !C->KtzOn) {
+                chipOk = XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_EN, 0x9C);
+                XunKtzDelayUs(5000);
+                chipOk = chipOk && XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_EN, 0x9E);
+                if (chipOk) {
+                    C->KtzOn = TRUE;
+                }
             }
-            ok = XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_LSB, (UCHAR)(v & 0x7)) &&
-                 XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_MSB, (UCHAR)((v >> 3) & 0xFF));
+            if (chipOk) {
+                ok = XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_LSB, (UCHAR)(v & 0x7)) &&
+                     XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_MSB, (UCHAR)((v >> 3) & 0xFF));
+            }
         }
         XunQupLockRelease(&C->QupLock);
         if (!ok && !ktzWarned) {
             ktzWarned = TRUE;
-            LogPrint("KTZ8866 failed (fw=%08x cbcr=%08x irq=%08x), trying DCS fallback\n",
-                     C->Ktz.LastFw, C->Ktz.LastCbcr, C->Ktz.LastIrq);
+            LogPrint("KTZ8866 failed (fw=%08x cbcr=%08x irq=%08x hwen=%08x/%08x->%08x/%08x)\n",
+                     C->Ktz.LastFw, C->Ktz.LastCbcr, C->Ktz.LastIrq,
+                     C->Ktz.HwenBeforeCtl, C->Ktz.HwenBeforeIo,
+                     C->Ktz.HwenAfterCtl, C->Ktz.HwenAfterIo);
         }
     }
-    if (forceDcs || (!ok && Pct > 0)) {
+    if (forceDcs && Pct > 0) {
         UCHAR dcs[3];
         ULONG lv = (Pct > 0 && v < 1) ? 1 : v;
         dcs[0] = 0x51;
-        dcs[1] = (UCHAR)(lv >> 8);
-        dcs[2] = (UCHAR)(lv & 0xFF);
+        dcs[1] = (UCHAR)((lv >> 3) & 0xFF);
+        dcs[2] = (UCHAR)(lv & 0x7);
         ok = DsiDcsSend(C, dcs, sizeof(dcs));
     }
     LogPrint("brightness %ld%% -> 0x%03x (%s)\n", Pct, v, ok ? "ok" : "failed");
@@ -225,7 +229,7 @@ static NTSTATUS HwInit(PDEVICE_CONTEXT C)
     if (C->DmaVa != NULL) {
         C->DmaPa = MmGetPhysicalAddress(C->DmaVa);
     }
-    C->KtzOn = TRUE;
+    C->KtzOn = FALSE;
     LogPrint("KTZ SE1=%p HWEN=%p, DSI0=%p dma_pa=%llx\n", C->Ktz.Se1, C->Ktz.Hwen, C->Dsi, C->DmaPa.QuadPart);
     if (C->Ktz.Se1 == NULL && C->Dsi == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
