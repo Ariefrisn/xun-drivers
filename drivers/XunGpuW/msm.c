@@ -62,7 +62,9 @@ static VOID BoUnmapAll(TGPU_BO *Bo, PEPROCESS OnlyProcess)
 
 static VOID BoFree(TGPU_BO *Bo)
 {
-    HwWaitFence(Bo->LastFence, 2000);
+    if (!HwWedged()) {
+        HwWaitFence(Bo->LastFence, 500);
+    }
     BoUnmapAll(Bo, NULL);
     TgFreePages(Bo->Mdl, Bo->KernelVa, Bo->Size, Bo->Iova);
     g_BoTable[Bo->Handle] = NULL;
@@ -144,7 +146,7 @@ static NTSTATUS GemNew(struct drm_msm_gem_new *A)
     bo->Flags = A->flags;
     bo->Refs = 1;
     lo.QuadPart = 0;
-    hi.QuadPart = 0xEFFFFFFF;                          /* v0.14: walks/fetches above 4 GB faulted */
+    hi.QuadPart = 0xFFFFFFFF;                          /* v0.14: walks/fetches above 4 GB faulted */
     skip.QuadPart = 0;
     UNREFERENCED_PARAMETER(lo);
     UNREFERENCED_PARAMETER(hi);

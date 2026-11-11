@@ -12,31 +12,9 @@
  * Control: C:\xun\brightness = 0..100 (text), polled every 330 ms. Log: C:\XunBacklight.log.
  */
 #include "driver.h"
-#include "xun_qup_lock.h"
+#include "xun_ktz8866.h"
 
-#define XUN_BL_VERSION       "v0.5"
-
-#define TLMM_BASE            0x00400000ULL
-#define TLMM_TILE_SOUTH      0x00500000ULL
-#define KTZ_HWEN_PA          (TLMM_BASE + TLMM_TILE_SOUTH + 102ULL * 0x1000ULL)
-
-#define QUP0_SE1_PA          0x04A84000ULL
-#define GENI_FW_REVISION_RO  0x68
-#define GENI_SER_M_CLK_CFG   0x48
-#define SE_I2C_TX_TRANS_LEN  0x26C
-#define SE_I2C_SCL_COUNTERS  0x278
-#define SE_GENI_M_CMD0       0x600
-#define SE_GENI_M_CMD_CTRL   0x604
-#define SE_GENI_M_IRQ_STATUS 0x610
-#define SE_GENI_M_IRQ_CLEAR  0x618
-#define SE_GENI_TX_FIFOn     0x700
-#define M_CMD_DONE           (1u << 0)
-#define M_I2C_ERR_MASK       ((1u << 1) | (1u << 2) | (1u << 3) | (1u << 5) | (1u << 10) | (1u << 12) | (1u << 13))
-
-#define KTZ8866_ADDR         0x11
-#define KTZ_REG_BL_LSB       0x04
-#define KTZ_REG_BL_MSB       0x05
-#define KTZ_REG_BL_EN        0x09
+#define XUN_BL_VERSION       "v0.6"
 
 #define DSI0_PA              0x05E94000ULL
 #define DSI0_SIZE            0x400
@@ -59,17 +37,16 @@
 #define POLL_MS              330
 
 typedef struct _DEVICE_CONTEXT {
-    volatile UCHAR *Se1;
-    volatile UCHAR *Hwen;
-    volatile UCHAR *Dsi;
-    PUCHAR          DmaVa;
+    XUN_KTZ_BUS      Ktz;
+    volatile UCHAR  *Dsi;
+    PUCHAR           DmaVa;
     PHYSICAL_ADDRESS DmaPa;
-    XUN_QUP_LOCK    QupLock;
-    BOOLEAN         KtzOn;
-    BOOLEAN         HwReady;
-    LONG            LastPct;
-    PKTHREAD        Thread;
-    KEVENT          StopEvent;
+    XUN_QUP_LOCK     QupLock;
+    BOOLEAN          KtzOn;
+    BOOLEAN          HwReady;
+    LONG             LastPct;
+    PKTHREAD         Thread;
+    KEVENT           StopEvent;
 } DEVICE_CONTEXT, *PDEVICE_CONTEXT;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DEVICE_CONTEXT, DeviceGetContext)
@@ -136,42 +113,6 @@ static LONG ReadPercent(VOID)
     return v;
 }
 
-static BOOLEAN KtzWriteReg(PDEVICE_CONTEXT C, UCHAR Reg, UCHAR Val)
-{
-    ULONG fw, i, st = 0;
-
-    if (C->Se1 == NULL) {
-        return FALSE;
-    }
-    fw = (Rd(C->Se1, GENI_FW_REVISION_RO) >> 8) & 0xFF;
-    if (fw != 3) {
-        return FALSE;
-    }
-    if ((Rd(C->Se1, GENI_SER_M_CLK_CFG) & 1u) == 0) {
-        Wr(C->Se1, GENI_SER_M_CLK_CFG, (2u << 4) | 1u);
-        Wr(C->Se1, SE_I2C_SCL_COUNTERS, (5u << 20) | (12u << 10) | 24u);
-    }
-    Wr(C->Se1, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFF);
-    Wr(C->Se1, SE_I2C_TX_TRANS_LEN, 2);
-    Wr(C->Se1, SE_GENI_M_CMD0, (1u << 27) | ((ULONG)KTZ8866_ADDR << 9));
-    Wr(C->Se1, SE_GENI_TX_FIFOn, (ULONG)Reg | ((ULONG)Val << 8));
-    for (i = 0; i < 20000; i++) {
-        st = Rd(C->Se1, SE_GENI_M_IRQ_STATUS);
-        if (st & (M_CMD_DONE | M_I2C_ERR_MASK)) {
-            break;
-        }
-        KeStallExecutionProcessor(1);
-    }
-    Wr(C->Se1, SE_GENI_M_IRQ_CLEAR, st);
-    if ((st & M_I2C_ERR_MASK) || !(st & M_CMD_DONE)) {
-        Wr(C->Se1, SE_GENI_M_CMD_CTRL, (1u << 2));
-        KeStallExecutionProcessor(50);
-        Wr(C->Se1, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFF);
-        return FALSE;
-    }
-    return TRUE;
-}
-
 static BOOLEAN DsiDcsSend(PDEVICE_CONTEXT C, const UCHAR *Payload, ULONG Len)
 {
     UCHAR pkt[16];
@@ -224,40 +165,46 @@ static BOOLEAN DsiDcsSend(PDEVICE_CONTEXT C, const UCHAR *Payload, ULONG Len)
 static BOOLEAN SetLevel(PDEVICE_CONTEXT C, LONG Pct)
 {
     ULONG v = (ULONG)Pct * BL_MAX / 100;
-    BOOLEAN ok = FALSE;
+    BOOLEAN ok = FALSE, forceDcs = FileExists(L"\\??\\C:\\xun\\bl.dcs");
+    static BOOLEAN ktzWarned;
 
     if (Pct > 0 && v < 16) {
         v = 16;
     }
-    if (FileExists(L"\\??\\C:\\xun\\bl.dcs")) {
+    if (!forceDcs && C->Ktz.Se1 != NULL && XunQupLockAcquire(&C->QupLock, 500)) {
+        if (Pct == 0) {
+            ok = XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_LSB, 0) &&
+                 XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_MSB, 0) &&
+                 XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_EN, 0x9C) &&
+                 XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_EN, 0x98);
+            C->KtzOn = FALSE;
+        } else {
+            XunKtzSetHwen(&C->Ktz);
+            if (!C->KtzOn) {
+                LARGE_INTEGER d;
+                XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_EN, 0x9C);
+                d.QuadPart = -50000LL;
+                KeDelayExecutionThread(KernelMode, FALSE, &d);
+                XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_EN, 0x9E);
+                C->KtzOn = TRUE;
+            }
+            ok = XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_LSB, (UCHAR)(v & 0x7)) &&
+                 XunKtzWriteReg(&C->Ktz, XUN_KTZ_REG_BL_MSB, (UCHAR)((v >> 3) & 0xFF));
+        }
+        XunQupLockRelease(&C->QupLock);
+        if (!ok && !ktzWarned) {
+            ktzWarned = TRUE;
+            LogPrint("KTZ8866 failed (fw=%08x cbcr=%08x irq=%08x), trying DCS fallback\n",
+                     C->Ktz.LastFw, C->Ktz.LastCbcr, C->Ktz.LastIrq);
+        }
+    }
+    if (forceDcs || (!ok && Pct > 0)) {
         UCHAR dcs[3];
         ULONG lv = (Pct > 0 && v < 1) ? 1 : v;
         dcs[0] = 0x51;
         dcs[1] = (UCHAR)(lv >> 8);
         dcs[2] = (UCHAR)(lv & 0xFF);
         ok = DsiDcsSend(C, dcs, sizeof(dcs));
-    } else if (XunQupLockAcquire(&C->QupLock, 500)) {
-        if (Pct == 0) {
-            ok = KtzWriteReg(C, KTZ_REG_BL_LSB, 0) && KtzWriteReg(C, KTZ_REG_BL_MSB, 0) &&
-                 KtzWriteReg(C, KTZ_REG_BL_EN, 0x9C) && KtzWriteReg(C, KTZ_REG_BL_EN, 0x98);
-            C->KtzOn = FALSE;
-        } else {
-            if (C->Hwen != NULL) {
-                Wr(C->Hwen, 0x0, (1u << 9));
-                Wr(C->Hwen, 0x4, 0x2);
-            }
-            if (!C->KtzOn) {
-                LARGE_INTEGER d;
-                KtzWriteReg(C, KTZ_REG_BL_EN, 0x9C);
-                d.QuadPart = -50000LL;
-                KeDelayExecutionThread(KernelMode, FALSE, &d);
-                KtzWriteReg(C, KTZ_REG_BL_EN, 0x9E);
-                C->KtzOn = TRUE;
-            }
-            ok = KtzWriteReg(C, KTZ_REG_BL_LSB, (UCHAR)(v & 0x7)) &&
-                 KtzWriteReg(C, KTZ_REG_BL_MSB, (UCHAR)((v >> 3) & 0xFF));
-        }
-        XunQupLockRelease(&C->QupLock);
     }
     LogPrint("brightness %ld%% -> 0x%03x (%s)\n", Pct, v, ok ? "ok" : "failed");
     return ok;
@@ -268,10 +215,7 @@ static NTSTATUS HwInit(PDEVICE_CONTEXT C)
     PHYSICAL_ADDRESS pa, lo, hi, skip;
 
     XunQupLockInit(&C->QupLock, XUN_QUP_SE1);
-    pa.QuadPart = (LONGLONG)QUP0_SE1_PA;
-    C->Se1 = (volatile UCHAR *)MmMapIoSpaceEx(pa, 0x4000, PAGE_READWRITE | PAGE_NOCACHE);
-    pa.QuadPart = (LONGLONG)KTZ_HWEN_PA;
-    C->Hwen = (volatile UCHAR *)MmMapIoSpaceEx(pa, 0x1000, PAGE_READWRITE | PAGE_NOCACHE);
+    XunKtzInit(&C->Ktz);
     pa.QuadPart = (LONGLONG)DSI0_PA;
     C->Dsi = (volatile UCHAR *)MmMapIoSpaceEx(pa, DSI0_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
     lo.QuadPart = 0;
@@ -282,8 +226,8 @@ static NTSTATUS HwInit(PDEVICE_CONTEXT C)
         C->DmaPa = MmGetPhysicalAddress(C->DmaVa);
     }
     C->KtzOn = TRUE;
-    LogPrint("KTZ SE1=%p HWEN=%p, DSI0=%p dma_pa=%llx\n", C->Se1, C->Hwen, C->Dsi, C->DmaPa.QuadPart);
-    if (C->Se1 == NULL && C->Dsi == NULL) {
+    LogPrint("KTZ SE1=%p HWEN=%p, DSI0=%p dma_pa=%llx\n", C->Ktz.Se1, C->Ktz.Hwen, C->Dsi, C->DmaPa.QuadPart);
+    if (C->Ktz.Se1 == NULL && C->Dsi == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     C->HwReady = TRUE;
@@ -302,14 +246,7 @@ static VOID HwDeinit(PDEVICE_CONTEXT C)
         MmUnmapIoSpace((PVOID)C->Dsi, DSI0_SIZE);
         C->Dsi = NULL;
     }
-    if (C->Hwen != NULL) {
-        MmUnmapIoSpace((PVOID)C->Hwen, 0x1000);
-        C->Hwen = NULL;
-    }
-    if (C->Se1 != NULL) {
-        MmUnmapIoSpace((PVOID)C->Se1, 0x4000);
-        C->Se1 = NULL;
-    }
+    XunKtzDeinit(&C->Ktz);
 }
 
 static KSTART_ROUTINE PollThread;

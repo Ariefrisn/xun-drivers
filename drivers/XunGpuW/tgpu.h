@@ -154,6 +154,10 @@ VOID     DispPresentRects(TGPU_ALLOCATION *Dst, const RECT *Rects, ULONG Count);
 VOID     DispScanoutWork(VOID);                                                   /* engine thread */
 VOID     DispSystemWrite(PVOID Src, UINT W, UINT H, UINT Stride, UINT X, UINT Y);
 VOID     DispAllocDestroyed(TGPU_ALLOCATION *Al);
+VOID     DispInitLocks(VOID);
+VOID     DispScanLock(VOID);
+VOID     DispScanUnlock(VOID);
+VOID     DispApertureWillUnmap(TGPU_ALLOCATION *Al);
 VOID     DispVsyncEnable(BOOLEAN Enable);
 NTSTATUS DispSetSourceAddress(const DXGKARG_SETVIDPNSOURCEADDRESS *A);
 NTSTATUS DispSetVisibility(const DXGKARG_SETVIDPNSOURCEVISIBILITY *A);

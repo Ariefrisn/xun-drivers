@@ -33,7 +33,7 @@ if not exist C:\xun\umd.disable (
 
 rem Ensure Root\XunTouch is installed first (OOBE/Setup touch blocker fix)
 if exist "%DRV%\XunTouch\XunTouch.inf" (
-  "%DEVCON%" status Root\XunTouch >nul 2>&1
+  "%DEVCON%" find Root\XunTouch 2>nul | findstr /i "ROOT\\XunTouch" >nul
   if errorlevel 1 (
     "%DEVCON%" install "%DRV%\XunTouch\XunTouch.inf" Root\XunTouch >> "%L%" 2>&1
     echo XunTouch install exit !errorlevel! >> "%L%"
@@ -50,7 +50,11 @@ if "!HAS_GPU0!"=="1" (
   )
 ) else (
   if exist "%DRV%\XunDisplay\XunDisplay.inf" (
-    "%DEVCON%" status Root\XunDisplay >nul 2>&1 || "%DEVCON%" install "%DRV%\XunDisplay\XunDisplay.inf" Root\XunDisplay >> "%L%" 2>&1
+    "%DEVCON%" find Root\XunDisplay 2>nul | findstr /i "ROOT\\XunDisplay" >nul
+    if errorlevel 1 (
+      "%DEVCON%" install "%DRV%\XunDisplay\XunDisplay.inf" Root\XunDisplay >> "%L%" 2>&1
+      echo XunDisplay install exit !errorlevel! >> "%L%"
+    )
     "%DEVCON%" status Root\XunDisplay 2>&1 | findstr /c:"Driver is running" >nul && (
       reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ROOT\BASICDISPLAY\0000" /v ConfigFlags /t REG_DWORD /d 1 /f >> "%L%" 2>&1
     )
@@ -60,7 +64,7 @@ if "!HAS_GPU0!"=="1" (
 rem Remaining root-enumerated core drivers (never install XunModem together with XunWifi)
 for %%d in (XunButtons XunBacklight XunBattery XunCpu XunRpm) do (
   if exist "%DRV%\%%d\%%d.inf" (
-    "%DEVCON%" status Root\%%d >nul 2>&1
+    "%DEVCON%" find Root\%%d 2>nul | findstr /i "ROOT\\%%d" >nul
     if errorlevel 1 (
       "%DEVCON%" install "%DRV%\%%d\%%d.inf" Root\%%d >> "%L%" 2>&1
       echo %%d install exit !errorlevel! >> "%L%"
@@ -69,14 +73,24 @@ for %%d in (XunButtons XunBacklight XunBattery XunCpu XunRpm) do (
 )
 
 if exist "C:\xun\fw\image\modem.mdt" if exist "%DRV%\XunWifi\XunWifi.inf" (
-  "%DEVCON%" status Root\XunWifi >nul 2>&1 || "%DEVCON%" install "%DRV%\XunWifi\XunWifi.inf" Root\XunWifi >> "%L%" 2>&1
+  "%DEVCON%" find Root\XunWifi 2>nul | findstr /i "ROOT\\XunWifi" >nul
+  if errorlevel 1 (
+    "%DEVCON%" install "%DRV%\XunWifi\XunWifi.inf" Root\XunWifi >> "%L%" 2>&1
+    echo XunWifi install exit !errorlevel! >> "%L%"
+  )
 )
 
 for %%d in (XunAudio XunSpeaker) do (
   if exist "%DRV%\%%d\%%d.inf" (
-    "%DEVCON%" status Root\%%d >nul 2>&1 || "%DEVCON%" install "%DRV%\%%d\%%d.inf" Root\%%d >> "%L%" 2>&1
+    "%DEVCON%" find Root\%%d 2>nul | findstr /i "ROOT\\%%d" >nul
+    if errorlevel 1 (
+      "%DEVCON%" install "%DRV%\%%d\%%d.inf" Root\%%d >> "%L%" 2>&1
+      echo %%d install exit !errorlevel! >> "%L%"
+    )
   )
 )
+
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Scheduler" /v EnablePreemption /t REG_DWORD /d 0 /f >> "%L%" 2>&1
 
 echo ok > C:\xun\installed.flag
 echo [%date% %time%] xun auto-install done >> "%L%"

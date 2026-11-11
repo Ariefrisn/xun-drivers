@@ -1,0 +1,74 @@
+diff --git a/src/gallium/frontends/d3d10umd/DxgiFns.cpp b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+index 3c9ae68..9f4120b 100644
+--- a/src/gallium/frontends/d3d10umd/DxgiFns.cpp
++++ b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+@@ -68,6 +68,8 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+    struct Device *device = CastDevice(pPresentData->hDevice);
+    Resource *pSrcResource = CastResource(pPresentData->hSurfaceToPresent);
+ 
++   if (!pSrcResource)
++      return E_INVALIDARG;
+    if (pSrcResource->hAllocation) {
+       Resource *pDst = pPresentData->hDstResource ? CastResource(pPresentData->hDstResource) : NULL;
+       XunStripsRestore(device);
+@@ -80,6 +82,10 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+       return hr;
+    }
+    XunWddmLogf("DXGI Present of a resource without allocation (flush_frontbuffer path)\n");
++   if (!pSrcResource->resource) {
++      XunWddmLogf("DXGI Present with NULL pipe_resource\n");
++      return E_OUTOFMEMORY;
++   }
+    device->pipe->screen->flush_frontbuffer(device->pipe->screen, device->pipe, 
+       pSrcResource->resource, 0, 0, pPresentData->pDXGIContext, 0, NULL);
+ 
+@@ -135,12 +141,20 @@ _SetDisplayMode( DXGI_DDI_ARG_SETDISPLAYMODE *SetDisplayMode )
+    Device* device = CastDevice(SetDisplayMode->hDevice);
+    Resource *res = CastResource(SetDisplayMode->hResource);
+ 
++   if (!res) {
++      XunWddmLogf("DXGI SetDisplayMode with NULL resource\n");
++      return E_INVALIDARG;
++   }
+    if (res->hAllocation) {
+       HRESULT hr = device->device.base.setDisplayMode(&device->device.base, res->hAllocation);
+       XunWddmLogf("DXGI SetDisplayMode alloc 0x%x -> 0x%08lx\n", res->hAllocation, (unsigned long)hr);
+       return hr;
+    }
+    XunWddmLogf("DXGI SetDisplayMode without allocation\n");
++   if (!res->resource) {
++      XunWddmLogf("DXGI SetDisplayMode with NULL pipe_resource\n");
++      return E_OUTOFMEMORY;
++   }
+ 
+    if(!device->screen->resource_get_handle) {
+       LOG_UNSUPPORTED_ENTRYPOINT();
+@@ -234,6 +248,11 @@ _RotateResourceIdentities(DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *RotateResourc
+       Device *device = CastDevice(RotateResourceIdentities->hDevice);
+       struct pipe_resource *prscs[16];
+       UINT n = NumResources < 16 ? NumResources : 16;
++      for (UINT i = 0; i < n; ++i) {
++         Resource *r = CastResource(hResources[i]);
++         if (!r || !r->resource)
++            return E_INVALIDARG;
++      }
+       D3DKMT_HANDLE firstAllocation = CastResource(hResources[0])->hAllocation;
+ 
+       /* XUN_ROTATE_REVERSE=1: rotate the other way ([i] takes [i-1]) - experiment */
+diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
+index d8c91be..4e20f1a 100644
+--- a/src/gallium/frontends/d3d10umd/Resource.cpp
++++ b/src/gallium/frontends/d3d10umd/Resource.cpp
+@@ -488,11 +488,9 @@ OpenResource(D3D10DDI_HDEVICE hDevice,                            // IN
+    whandle.type = WINSYS_HANDLE_TYPE_WIN32_HANDLE;
+    whandle.handle = (HANDLE)pOpenResource->hKMResource.handle;
+    
++   (void)whandle;
+    /* XunGpu C2: the allocation's private data names the BO */
+    pResource->resource = XunWddmOpen(pDevice, pOpenResource, &pResource->hAllocation);
+-   if (!pResource->resource)
+-   pResource->resource =
+-      pDevice->screen->resource_from_handle(pDevice->screen, NULL, &whandle, 0);
+    
+    if (!pResource->resource) {
+       DebugPrintf("%s: failed\n", __func__);

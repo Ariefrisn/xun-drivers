@@ -456,7 +456,7 @@ static BOOLEAN ZapLoad(VOID)
         goto out;
     }
     lo.QuadPart = 0;
-    hi.QuadPart = 0xEFFFFFFF;
+    hi.QuadPart = 0xFFFFFFFF;
     bound.QuadPart = 0;
     meta = (PUCHAR)MmAllocateContiguousMemorySpecifyCache(ROUND_TO_PAGES(mdtSize), lo, hi, bound, MmWriteCombined);
     if (meta == NULL) {
@@ -679,7 +679,7 @@ PMDL TgAllocPages(SIZE_T Size, PULONGLONG Iova, PVOID *KernelVa)
     PMDL mdl;
 
     lo.QuadPart = 0;
-    hi.QuadPart = 0xEFFFFFFF;
+    hi.QuadPart = 0xFFFFFFFF;
     bound.QuadPart = 0;
     Size = ROUND_TO_PAGES(Size);
     va = MmAllocateContiguousMemorySpecifyCache(Size, lo, hi, bound, MmWriteCombined);
@@ -701,7 +701,7 @@ PMDL TgAllocPages(SIZE_T Size, PULONGLONG Iova, PVOID *KernelVa)
     PMDL mdl;
 
     lo.QuadPart = 0;
-    hi.QuadPart = 0xEFFFFFFF;
+    hi.QuadPart = 0xFFFFFFFF;
     skip.QuadPart = 0;
     Size = ROUND_TO_PAGES(Size);
     mdl = MmAllocatePagesForMdlEx(lo, hi, skip, Size, MmWriteCombined, MM_ALLOCATE_FULLY_REQUIRED);

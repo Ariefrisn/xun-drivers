@@ -10,7 +10,7 @@
  * on QUP0 SE1 + HWEN GPIO 102 SOUTH (shared with xun_qup_lock.h), with C:\xun\bl.dcs fallback.
  */
 #include "tgpu.h"
-#include "xun_qup_lock.h"
+#include "xun_ktz8866.h"
 
 /* GUID_DEVINTERFACE_BRIGHTNESS (ntddvdeo.h, already included by dispmprt.h without initguid) */
 static const GUID g_BrightnessGuid = { 0xFDE5BBA4, 0xB3F9, 0x46FB, { 0xBD, 0xAA, 0x07, 0x28, 0xCE, 0x31, 0x00, 0xB4 } };
@@ -92,7 +92,8 @@ static ULONG g_FlipWaits;
 static volatile LONG g_ScanDirty;
 static volatile LONG g_FlipPending;
 static volatile LONG g_VsyncOn;
-static KMUTEX g_ScanLock;                       /* engine copies vs. DestroyAllocation */
+static KMUTEX g_ScanLock;                       /* engine copies & aperture maps vs. DestroyAllocation */
+static volatile LONG g_ScanLockInit;
 
 static volatile LONG g_FlipCount;              /* v0.39: flips per second in the log */
 static KTIMER g_VsyncTimer;
@@ -295,18 +296,67 @@ NTSTATUS DispGetScanLine(DXGKARG_GETSCANLINE *A)
 
 /* ---------------------------------------------------------------- scanout */
 
-static VOID CopyRectToFb(PUCHAR Src, ULONG SrcPitch, ULONG SrcW, ULONG SrcH, const RECT *R)
+VOID DispInitLocks(VOID)
+{
+    if (InterlockedCompareExchange(&g_ScanLockInit, 1, 0) == 0) {
+        KeInitializeMutex(&g_ScanLock, 0);
+    }
+}
+
+VOID DispScanLock(VOID)
+{
+    DispInitLocks();
+    KeWaitForSingleObject(&g_ScanLock, Executive, KernelMode, FALSE, NULL);
+}
+
+VOID DispScanUnlock(VOID)
+{
+    KeReleaseMutex(&g_ScanLock, FALSE);
+}
+
+static SIZE_T AllocByteSize(const TGPU_ALLOCATION *Al)
+{
+    if (Al == NULL) {
+        return 0;
+    }
+    if (Al->Bo != NULL) {
+        return (Al->Bo->Size > Al->Desc.bo_offset) ? (Al->Bo->Size - Al->Desc.bo_offset) : 0;
+    }
+    return Al->ApBytes;
+}
+
+static VOID CopyRectToFb(PUCHAR Src, SIZE_T MaxBytes, ULONG SrcPitch, ULONG SrcW, ULONG SrcH, const RECT *R)
 {
     LONG l = R->left, t = R->top, r = R->right, b = R->bottom, y;
     ULONG w = g_Post.Width, h = g_Post.Height;
+    SIZE_T rowBytes;
 
+    if (Src == NULL || g_Fb == NULL || SrcPitch < 4 || SrcW == 0 || SrcH == 0 || MaxBytes < 4) {
+        return;
+    }
     if (l < 0) l = 0;
     if (t < 0) t = 0;
     if (r > (LONG)SrcW) r = SrcW;
     if (b > (LONG)SrcH) b = SrcH;
     if (r > (LONG)w) r = w;
     if (b > (LONG)h) b = h;
+    if ((SIZE_T)r * 4 > SrcPitch) {
+        r = (LONG)(SrcPitch / 4);
+    }
     if (r <= l || b <= t) {
+        return;
+    }
+    rowBytes = (SIZE_T)r * 4;
+    if (rowBytes > MaxBytes) {
+        return;
+    }
+    {
+        LONG maxB = (LONG)((MaxBytes - rowBytes) / SrcPitch) + 1;
+        if (b > maxB) {
+            b = maxB;
+        }
+    }
+    if (b <= t) {
         return;
     }
     if (!g_DispFlip) {
@@ -333,41 +383,43 @@ VOID DispScanoutWork(VOID)
     RECT all;
     static ULONG count;
 
-    KeWaitForSingleObject(&g_ScanLock, Executive, KernelMode, FALSE, NULL);
+    DispScanLock();
     al = g_ScanCur;
     if (al != NULL && !g_DirectActive && g_Fb != NULL && g_Visible && (px = AllocPixels(al)) != NULL) {
         all.left = all.top = 0;
         all.right = al->Desc.width;
         all.bottom = al->Desc.height;
-        CopyRectToFb(px, al->Desc.pitch, al->Desc.width, al->Desc.height, &all);
+        CopyRectToFb(px, AllocByteSize(al), al->Desc.pitch, al->Desc.width, al->Desc.height, &all);
         if (++count <= 5) {
             LogPrint("scanout: %ux%u pitch %u from %p (%s)\n", al->Desc.width, al->Desc.height, al->Desc.pitch, al,
                      al->Bo != NULL ? "bo" : "vidmm");
         }
     }
-    KeReleaseMutex(&g_ScanLock, FALSE);
+    DispScanUnlock();
 }
 
 VOID DispPresentRects(TGPU_ALLOCATION *Dst, const RECT *Rects, ULONG Count)
 {
     PUCHAR px;
+    SIZE_T maxBytes;
     ULONG i;
 
     if (Dst != g_ScanCur || g_DirectActive || g_Fb == NULL || !g_Visible) {
         return;
     }
-    KeWaitForSingleObject(&g_ScanLock, Executive, KernelMode, FALSE, NULL);
+    DispScanLock();
     if (Dst == g_ScanCur && (px = AllocPixels(Dst)) != NULL) {
+        maxBytes = AllocByteSize(Dst);
         for (i = 0; i < Count; i++) {
-            CopyRectToFb(px, Dst->Desc.pitch, Dst->Desc.width, Dst->Desc.height, &Rects[i]);
+            CopyRectToFb(px, maxBytes, Dst->Desc.pitch, Dst->Desc.width, Dst->Desc.height, &Rects[i]);
         }
     }
-    KeReleaseMutex(&g_ScanLock, FALSE);
+    DispScanUnlock();
 }
 
 VOID DispAllocDestroyed(TGPU_ALLOCATION *Al)
 {
-    KeWaitForSingleObject(&g_ScanLock, Executive, KernelMode, FALSE, NULL);
+    DispScanLock();
     if (g_DeferAl == Al) {                               /* never flip to a freed BO later */
         InterlockedExchange(&g_Deferred, 0);
         g_DeferAl = NULL;
@@ -377,7 +429,18 @@ VOID DispAllocDestroyed(TGPU_ALLOCATION *Al)
         g_ScanCur = NULL;
         LogPrint("scanout: primary %p destroyed while scanned out\n", Al);
     }
-    KeReleaseMutex(&g_ScanLock, FALSE);
+    DispScanUnlock();
+}
+
+VOID DispApertureWillUnmap(TGPU_ALLOCATION *Al)
+{
+    DispScanLock();
+    if (Al != NULL && g_ScanCur == Al) {
+        DirectSelect(NULL);
+        g_ScanCur = NULL;
+    }
+    AllocUnmapAperture(Al);
+    DispScanUnlock();
 }
 
 /* may run at DIRQL (MMIO-style flip): only plain stores, the vsync DPC does the rest */
@@ -498,7 +561,7 @@ NTSTATUS DispStart(PDXGKRNL_INTERFACE Dxgk)
     LARGE_INTEGER due;
 
     g_Dxgk = Dxgk;
-    KeInitializeMutex(&g_ScanLock, 0);
+    DispInitLocks();
     RtlZeroMemory(&g_Post, sizeof(g_Post));
     st = Dxgk->DxgkCbAcquirePostDisplayOwnership(Dxgk->DeviceHandle, &g_Post);
     LogPrint("AcquirePostDisplayOwnership: %08x %ux%u pitch %u fmt %u pa %llx target %u acpi %u\n", st, g_Post.Width,
@@ -579,7 +642,10 @@ VOID DispStop(VOID)
         g_TimerOn = FALSE;
     }
     XunQupLockClose(&g_BlQupLock);
+    XunKtzDeinit(&g_Ktz);
+    DispScanLock();
     g_ScanCur = NULL;
+    DispScanUnlock();
     g_Dxgk = NULL;
 }
 
@@ -995,9 +1061,9 @@ NTSTATUS DispCommitVidPn(PDXGKRNL_INTERFACE Dxgk, const DXGKARG_COMMITVIDPN *A)
                  pin ? pin->Format.Graphics.Stride : 0, pin ? pin->Format.Graphics.PixelFormat : 0, A->hPrimaryAllocation);
         if (!g_Committed) {
             DirectSelect(NULL);
-            KeWaitForSingleObject(&g_ScanLock, Executive, KernelMode, FALSE, NULL);
+            DispScanLock();
             g_ScanCur = NULL;
-            KeReleaseMutex(&g_ScanLock, FALSE);
+            DispScanUnlock();
         } else if (A->hPrimaryAllocation != NULL) {
             g_ScanCur = (TGPU_ALLOCATION *)A->hPrimaryAllocation;
             if (!DirectSelect(g_ScanCur)) {
@@ -1018,13 +1084,6 @@ NTSTATUS DispCommitVidPn(PDXGKRNL_INTERFACE Dxgk, const DXGKARG_COMMITVIDPN *A)
 
 /* ---------------------------------------------------------------- brightness (KTZ8866 QUP0 SE1 + DCS 0x51 fallback) */
 
-#define KTZ_TLMM_HWEN_PA    (0x00400000ULL + 0x00500000ULL + 102ULL * 0x1000ULL)
-#define KTZ_QUP0_SE1_PA     0x04A84000ULL
-#define KTZ_I2C_ADDR        0x11
-#define KTZ_REG_BL_LSB      0x04
-#define KTZ_REG_BL_MSB      0x05
-#define KTZ_REG_BL_EN       0x09
-
 #define DSI0_PA             0x05E94000ULL
 #define DSI_CTRL            0x004
 #define DSI_CMD_DMA_CTRL    0x03C
@@ -1035,8 +1094,7 @@ NTSTATUS DispCommitVidPn(PDXGKRNL_INTERFACE Dxgk, const DXGKARG_COMMITVIDPN *A)
 #define DSI_INT_CTRL        0x110
 #define DSI_TPG_CTRL        0x15C
 
-static volatile UCHAR *g_Se1;
-static volatile UCHAR *g_KtzHwen;
+static XUN_KTZ_BUS g_Ktz;
 static volatile UCHAR *g_Dsi;
 static PUCHAR g_BlVa;
 static PHYSICAL_ADDRESS g_BlPa;
@@ -1046,58 +1104,17 @@ static KMUTEX g_BlLock;
 
 static ULONG DsiRd(ULONG Off) { return READ_REGISTER_ULONG((volatile ULONG *)(g_Dsi + Off)); }
 static VOID DsiWr(ULONG Off, ULONG V) { WRITE_REGISTER_ULONG((volatile ULONG *)(g_Dsi + Off), V); }
-static ULONG Se1Rd(ULONG Off) { return READ_REGISTER_ULONG((volatile ULONG *)(g_Se1 + Off)); }
-static VOID Se1Wr(ULONG Off, ULONG V) { WRITE_REGISTER_ULONG((volatile ULONG *)(g_Se1 + Off), V); }
-
-static BOOLEAN KtzWr(UCHAR Reg, UCHAR Val)
-{
-    ULONG fw, i, st = 0;
-
-    if (g_Se1 == NULL) {
-        return FALSE;
-    }
-    fw = (Se1Rd(0x68) >> 8) & 0xFF;             /* GENI_FW_REVISION_RO == proto 3 (I2C) */
-    if (fw != 3) {
-        return FALSE;
-    }
-    if ((Se1Rd(0x48) & 1u) == 0) {              /* GENI_SER_M_CLK_CFG */
-        Se1Wr(0x48, (2u << 4) | 1u);
-        Se1Wr(0x278, (5u << 20) | (12u << 10) | 24u);
-    }
-    Se1Wr(0x618, 0xFFFFFFFF);                   /* SE_GENI_M_IRQ_CLEAR */
-    Se1Wr(0x26C, 2);                            /* SE_I2C_TX_TRANS_LEN */
-    Se1Wr(0x600, (1u << 27) | ((ULONG)KTZ_I2C_ADDR << 9));
-    Se1Wr(0x700, (ULONG)Reg | ((ULONG)Val << 8));
-    for (i = 0; i < 20000; i++) {
-        st = Se1Rd(0x610);
-        if (st & ((1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 5) | (1u << 10) | (1u << 12) | (1u << 13))) {
-            break;
-        }
-        KeStallExecutionProcessor(1);
-    }
-    Se1Wr(0x618, st);
-    if ((st & ((1u << 1) | (1u << 2) | (1u << 3) | (1u << 5) | (1u << 10) | (1u << 12) | (1u << 13))) || !(st & 1u)) {
-        Se1Wr(0x604, (1u << 2));
-        KeStallExecutionProcessor(50);
-        Se1Wr(0x618, 0xFFFFFFFF);
-        return FALSE;
-    }
-    return TRUE;
-}
 
 static VOID InitBrightness(VOID)
 {
     PHYSICAL_ADDRESS pa, lo, hi, skip;
 
-    if (g_Dsi != NULL || g_Se1 != NULL) {
+    if (g_Dsi != NULL || g_Ktz.Se1 != NULL) {
         return;
     }
     KeInitializeMutex(&g_BlLock, 0);
     XunQupLockInit(&g_BlQupLock, XUN_QUP_SE1);
-    pa.QuadPart = (LONGLONG)KTZ_QUP0_SE1_PA;
-    g_Se1 = (volatile UCHAR *)MmMapIoSpaceEx(pa, 0x4000, PAGE_READWRITE | PAGE_NOCACHE);
-    pa.QuadPart = (LONGLONG)KTZ_TLMM_HWEN_PA;
-    g_KtzHwen = (volatile UCHAR *)MmMapIoSpaceEx(pa, 0x1000, PAGE_READWRITE | PAGE_NOCACHE);
+    XunKtzInit(&g_Ktz);
     pa.QuadPart = (LONGLONG)DSI0_PA;
     g_Dsi = (volatile UCHAR *)MmMapIoSpaceEx(pa, 0x400, PAGE_READWRITE | PAGE_NOCACHE);
     lo.QuadPart = 0;
@@ -1108,7 +1125,7 @@ static VOID InitBrightness(VOID)
         g_BlPa = MmGetPhysicalAddress(g_BlVa);
     }
     LogPrint("brightness: KTZ SE1=%p HWEN=%p, DSI0=%p DMA=%llx\n",
-             g_Se1, g_KtzHwen, g_Dsi, g_BlPa.QuadPart);
+             g_Ktz.Se1, g_Ktz.Hwen, g_Dsi, g_BlPa.QuadPart);
 }
 
 static BOOLEAN DsiDcsLong(const UCHAR *Payload, ULONG Len)
@@ -1158,41 +1175,47 @@ static BOOLEAN DsiDcsLong(const UCHAR *Payload, ULONG Len)
 static BOOLEAN BlApply(UCHAR Pct, BOOLEAN On)
 {
     ULONG level = On ? ((ULONG)Pct * 0x7FF / 100) : 0;
-    BOOLEAN done = FALSE;
+    BOOLEAN done = FALSE, forceDcs = DispFileExists(L"\\??\\C:\\xun\\bl.dcs");
+    static BOOLEAN ktzWarned;
 
     if (On && Pct > 0 && level < 16) {
         level = 16;
     }
     KeWaitForSingleObject(&g_BlLock, Executive, KernelMode, FALSE, NULL);
-    if (DispFileExists(L"\\??\\C:\\xun\\bl.dcs")) {
+    if (!forceDcs && g_Ktz.Se1 != NULL && XunQupLockAcquire(&g_BlQupLock, 500)) {
+        if (!On || Pct == 0) {
+            done = XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_LSB, 0) &&
+                   XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_MSB, 0) &&
+                   XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9C) &&
+                   XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x98);
+            g_KtzOn = FALSE;
+        } else {
+            XunKtzSetHwen(&g_Ktz);
+            if (!g_KtzOn) {
+                LARGE_INTEGER delay;
+                XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9C);
+                delay.QuadPart = -50000LL;
+                KeDelayExecutionThread(KernelMode, FALSE, &delay);
+                XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9E);
+                g_KtzOn = TRUE;
+            }
+            done = XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_LSB, (UCHAR)(level & 0x7)) &&
+                   XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_MSB, (UCHAR)((level >> 3) & 0xFF));
+        }
+        XunQupLockRelease(&g_BlQupLock);
+        if (!done && !ktzWarned) {
+            ktzWarned = TRUE;
+            LogPrint("brightness: KTZ8866 QUP0 SE1 failed (fw=%08x cbcr=%08x irq=%08x), trying DCS fallback\n",
+                     g_Ktz.LastFw, g_Ktz.LastCbcr, g_Ktz.LastIrq);
+        }
+    }
+    if (forceDcs || (!done && On && Pct > 0)) {
         UCHAR cmd[3];
         ULONG dcs = (On && level < 1) ? 1 : level;
         cmd[0] = 0x51;
         cmd[1] = (UCHAR)(dcs >> 8);
         cmd[2] = (UCHAR)dcs;
         done = DsiDcsLong(cmd, sizeof(cmd));
-    } else if (XunQupLockAcquire(&g_BlQupLock, 500)) {
-        if (!On || Pct == 0) {
-            done = KtzWr(KTZ_REG_BL_LSB, 0) && KtzWr(KTZ_REG_BL_MSB, 0) &&
-                   KtzWr(KTZ_REG_BL_EN, 0x9C) && KtzWr(KTZ_REG_BL_EN, 0x98);
-            g_KtzOn = FALSE;
-        } else {
-            if (g_KtzHwen != NULL) {
-                WRITE_REGISTER_ULONG((volatile ULONG *)(g_KtzHwen + 0x0), (1u << 9));
-                WRITE_REGISTER_ULONG((volatile ULONG *)(g_KtzHwen + 0x4), 0x2);
-            }
-            if (!g_KtzOn) {
-                LARGE_INTEGER delay;
-                KtzWr(KTZ_REG_BL_EN, 0x9C);
-                delay.QuadPart = -50000LL;
-                KeDelayExecutionThread(KernelMode, FALSE, &delay);
-                KtzWr(KTZ_REG_BL_EN, 0x9E);
-                g_KtzOn = TRUE;
-            }
-            done = KtzWr(KTZ_REG_BL_LSB, (UCHAR)(level & 0x7)) &&
-                   KtzWr(KTZ_REG_BL_MSB, (UCHAR)((level >> 3) & 0xFF));
-        }
-        XunQupLockRelease(&g_BlQupLock);
     }
     KeReleaseMutex(&g_BlLock, FALSE);
     return done;
@@ -1238,7 +1261,11 @@ static VOID BlPanel(BOOLEAN On)
 {
     BOOLEAN done;
 
-    if ((g_Se1 == NULL && g_Dsi == NULL) || KeGetCurrentIrql() != PASSIVE_LEVEL) {
+    if ((g_Ktz.Se1 == NULL && g_Dsi == NULL) || KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        return;
+    }
+    if (!On && g_Done < 10 && !DispFileExists(L"\\??\\C:\\xun\\bl.off")) {
+        LogPrint("panel off deferred during boot (done=%u)\n", g_Done);
         return;
     }
     done = BlApply(g_Brightness, On);
@@ -1263,7 +1290,7 @@ NTSTATUS DispBrightnessQueryInterface(PQUERY_INTERFACE Qi)
         RtlCompareMemory(Qi->InterfaceType, &g_BrightnessGuid, sizeof(GUID)) != sizeof(GUID)) {
         return STATUS_NOT_SUPPORTED;
     }
-    if ((g_Se1 == NULL && (g_Dsi == NULL || g_BlVa == NULL)) ||
+    if ((g_Ktz.Se1 == NULL && (g_Dsi == NULL || g_BlVa == NULL)) ||
         Qi->Size < sizeof(DXGK_BRIGHTNESS_INTERFACE) || Qi->Interface == NULL) {
         LogPrint("QueryInterface brightness v%u size %u: not available\n", Qi->Version, Qi->Size);
         return STATUS_NOT_SUPPORTED;

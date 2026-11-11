@@ -139,10 +139,12 @@ static VOID Execute(const ENG_ITEM *It)
             PagingFill(c);
             break;
         case TG_CMD_PG_MAP:
+            DispScanLock();
             AllocMapAperture(c->Dst, c->Mdl, c->MdlOffset, c->Pages);
+            DispScanUnlock();
             break;
         case TG_CMD_PG_UNMAP:
-            AllocUnmapAperture(c->Dst);
+            DispApertureWillUnmap(c->Dst);
             break;
         default:
             break;

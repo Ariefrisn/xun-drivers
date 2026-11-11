@@ -606,10 +606,15 @@ VOID AllocUnmapAperture(TGPU_ALLOCATION *Al)
 
 VOID AllocRelease(TGPU_ALLOCATION *Al)
 {
+    if (Al == NULL) {
+        return;
+    }
     if (InterlockedDecrement(&Al->Refs) != 0) {
         return;
     }
+    DispScanLock();
     AllocUnmapAperture(Al);
+    DispScanUnlock();
     if (Al->Bo != NULL) {
         MsmBoRelease(Al->Bo);
     }
@@ -688,7 +693,7 @@ static NTSTATUS APIENTRY TgCreateAllocation(const HANDLE hAdapter, DXGKARG_CREAT
         ai->AllocationPriority = D3DDDI_ALLOCATIONPRIORITY_NORMAL;
         ai->Flags.Value = 0;
         ai->Flags.CpuVisible = 1;
-        if (++count <= 40 || d == NULL) {
+        if (++count <= 120 || d == NULL) {
             LogPrint("CreateAllocation %p: kind %u %ux%u pitch %u fmt %u bo %u size %u%s%s\n", al, al->Desc.kind,
                      al->Desc.width, al->Desc.height, al->Desc.pitch, al->Desc.format, al->Desc.bo, (ULONG)al->Size,
                      (al->Desc.flags & XUNGPU_ALLOC_F_PRIMARY) ? " primary" : "", d == NULL ? " (no desc)" : "");
@@ -704,6 +709,9 @@ static NTSTATUS APIENTRY TgDestroyAllocation(const HANDLE hAdapter, const DXGKAR
     UNREFERENCED_PARAMETER(hAdapter);
     for (i = 0; i < A->NumAllocations; i++) {
         TGPU_ALLOCATION *al = (TGPU_ALLOCATION *)A->pAllocationList[i];
+        if (al == NULL) {
+            continue;
+        }
         DispAllocDestroyed(al);
         AllocRelease(al);
     }
@@ -968,12 +976,14 @@ static NTSTATUS APIENTRY TgBuildPagingBuffer(const HANDLE hAdapter, DXGKARG_BUIL
     case DXGK_OPERATION_MAP_APERTURE_SEGMENT:
         GartMap(A->MapApertureSegment.OffsetInPages, A->MapApertureSegment.pMdl, A->MapApertureSegment.MdlOffset,
                 A->MapApertureSegment.NumberOfPages);
+        DispScanLock();
         AllocMapAperture((TGPU_ALLOCATION *)A->MapApertureSegment.hAllocation, A->MapApertureSegment.pMdl,
                          A->MapApertureSegment.MdlOffset, A->MapApertureSegment.NumberOfPages);
+        DispScanUnlock();
         break;
     case DXGK_OPERATION_UNMAP_APERTURE_SEGMENT:
+        DispApertureWillUnmap((TGPU_ALLOCATION *)A->UnmapApertureSegment.hAllocation);
         GartUnmap(A->UnmapApertureSegment.OffsetInPages, A->UnmapApertureSegment.NumberOfPages);
-        AllocUnmapAperture((TGPU_ALLOCATION *)A->UnmapApertureSegment.hAllocation);
         break;
     case DXGK_OPERATION_FILL:
         if (A->Fill.hAllocation == NULL) {
@@ -1226,6 +1236,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 
     LogOpen();
     LogPrint("==== XunGpuW " TGPU_VERSION " (display + msm escapes, step C2, 1 ms high-res vsync, gpu.mhz, async present flips) ====\n");
+    DispInitLocks();
     MsmInit();
     RtlZeroMemory(&d, sizeof(d));
     d.Version = DXGKDDI_INTERFACE_VERSION_WDDM1_3;
