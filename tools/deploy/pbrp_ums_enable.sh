@@ -71,9 +71,9 @@ if [ -d "$MS" ]; then
   [ -n "$UDC" ] && [ "$UDC" != "none" ] && [ "$UDC" != "" ] || UDC="$(getprop sys.usb.controller)"
   [ -n "$UDC" ] || UDC="$(ls /sys/class/udc 2>/dev/null | head -n 1)"
 
-  # Disable PBRP MTP auto-restart and reset USB functions cleanly
+  # Disable PBRP MTP auto-restart and reset sys.usb.config=none so init does NOT race on 0x4E11
   command -v twrp >/dev/null 2>&1 && twrp set tw_mtp_enabled 0 2>/dev/null || true
-  setprop sys.usb.config none
+  setprop sys.usb.config none 2>/dev/null || true
   sleep 2
   unbind_links
 
@@ -84,15 +84,44 @@ if [ -d "$MS" ]; then
   echo "" > "$LUN" 2>/dev/null || true
   echo "$REAL" > "$LUN"
 
+  # Start adbd without touching sys.usb.config; wait briefly for FunctionFS endpoints
   start adbd 2>/dev/null || true
-  sleep 1
+  for _w in 1 2 3 4; do
+    [ "$(getprop sys.usb.ffs.ready 2>/dev/null)" = "1" ] && break
+    sleep 1
+  done
+
   echo 0x18D1 > "$GADGET/idVendor"
   echo 0x9025 > "$GADGET/idProduct"
   echo "ums_adb" > "$CFG/strings/0x409/configuration" 2>/dev/null || true
-  ln -s "$MS" "$CFG/f1"
-  [ -d "$GADGET/functions/ffs.adb" ] && ln -s "$GADGET/functions/ffs.adb" "$CFG/f2"
-  echo "$UDC" > "$GADGET/UDC"
-  echo "UMS active (ConfigFS 18D1:9025 + ADB): $TARGET ($REAL) -> $LUN"
+  ln -s "$MS" "$CFG/f1" 2>/dev/null || true
+  [ -d "$GADGET/functions/ffs.adb" ] && ln -s "$GADGET/functions/ffs.adb" "$CFG/f2" 2>/dev/null || true
+
+  bound=0
+  if echo "$UDC" > "$GADGET/UDC" 2>/dev/null; then
+    sleep 1
+    cur_udc="$(cat "$GADGET/UDC" 2>/dev/null)"
+    cur_pid="$(cat "$GADGET/idProduct" 2>/dev/null)"
+    cur_f1="$(readlink "$CFG/f1" 2>/dev/null)"
+    if [ "$cur_udc" = "$UDC" ] && echo "$cur_pid" | grep -qi "9025" && echo "$cur_f1" | grep -q "mass_storage"; then
+      bound=1
+    fi
+  fi
+  if [ "$bound" = "1" ]; then
+    echo "UMS active (ConfigFS 18D1:9025 + ADB): $TARGET ($REAL) -> $LUN"
+    exit 0
+  fi
+
+  # Fallback to pure UMS (18D1:9024) if composite ADB FunctionFS bind fails
+  unbind_links
+  echo "" > "$LUN" 2>/dev/null || true
+  echo "$REAL" > "$LUN"
+  ln -s "$MS" "$CFG/f1" 2>/dev/null || true
+  echo 0x18D1 > "$GADGET/idVendor"
+  echo 0x9024 > "$GADGET/idProduct"
+  echo "ums" > "$CFG/strings/0x409/configuration" 2>/dev/null || true
+  echo "$UDC" > "$GADGET/UDC" 2>/dev/null || true
+  echo "UMS active (pure UMS fallback, ConfigFS 18D1:9024): $TARGET ($REAL) -> $LUN"
   exit 0
 fi
 
