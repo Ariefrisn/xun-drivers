@@ -19,33 +19,15 @@ jobs:
       - uses: microsoft/setup-msbuild@v2
 
       - name: Build drivers (ARM64 Release)
+        shell: pwsh
         run: |
-          msbuild drivers\XunTouch\XunTouch.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
-          if ($LASTEXITCODE) { throw "XunTouch build failed" }
-          msbuild drivers\XunBattery\XunBattery.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
-          if ($LASTEXITCODE) { throw "XunBattery build failed" }
-          msbuild drivers\XunDisplay\XunDisplay.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
-          if ($LASTEXITCODE) { throw "XunDisplay build failed" }
-          msbuild drivers\XunButtons\XunButtons.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
-          if ($LASTEXITCODE) { throw "XunButtons build failed" }
-          msbuild drivers\XunModem\XunModem.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
-          if ($LASTEXITCODE) { throw "XunModem build failed" }
-          msbuild drivers\XunWifi\XunWifi.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
-          if ($LASTEXITCODE) { throw "XunWifi build failed" }
-          msbuild drivers\XunCpu\XunCpu.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
-          if ($LASTEXITCODE) { throw "XunCpu build failed" }
-          msbuild drivers\XunRpm\XunRpm.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
-          if ($LASTEXITCODE) { throw "XunRpm build failed" }
-          msbuild drivers\XunBacklight\XunBacklight.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
-          if ($LASTEXITCODE) { throw "XunBacklight build failed" }
-          msbuild drivers\XunGpu\XunGpu.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
-          if ($LASTEXITCODE) { throw "XunGpu build failed" }
-          msbuild drivers\XunGpuW\XunGpuW.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
-          if ($LASTEXITCODE) { throw "XunGpuW build failed" }
-          msbuild drivers\XunAudio\XunAudio.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
-          if ($LASTEXITCODE) { throw "XunAudio build failed" }
-          msbuild drivers\XunSpeaker\XunSpeaker.vcxproj /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
-          if ($LASTEXITCODE) { throw "XunSpeaker build failed" }
+          $failed = @()
+          foreach ($name in @("XunTouch", "XunBattery", "XunDisplay", "XunButtons", "XunModem", "XunWifi", "XunCpu", "XunRpm", "XunBacklight", "XunGpu", "XunGpuW", "XunAudio", "XunSpeaker")) {
+            Write-Host "=== Building $name ==="
+            msbuild "drivers\$name\$name.vcxproj" /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
+            if ($LASTEXITCODE) { $failed += $name; Write-Host "::error::$name build failed" }
+          }
+          if ($failed.Count -gt 0) { throw "Failed drivers: $($failed -join ', ')" }
 
       - uses: ilammy/msvc-dev-cmd@v1
         with:

@@ -385,7 +385,7 @@ NTSTATUS XunBlQueryInterface(PQUERY_INTERFACE Q)
 {
     DXGK_BRIGHTNESS_INTERFACE *bi;
 
-    if (!IsEqualGUID(*Q->InterfaceType, GUID_DEVINTERFACE_BRIGHTNESS)) {
+    if (memcmp(Q->InterfaceType, &GUID_DEVINTERFACE_BRIGHTNESS, sizeof(GUID)) != 0) {
         return STATUS_NOT_SUPPORTED;
     }
     if (Q->Size < sizeof(*bi)) {
