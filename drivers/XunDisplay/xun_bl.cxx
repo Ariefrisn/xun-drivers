@@ -341,7 +341,12 @@ static BOOLEAN DsdtHasGpu0(VOID)
     return found;
 }
 
-static BOOLEAN g_XunGpuOwnsPanel;
+BOOLEAN g_XunGpuOwnsPanel = FALSE;
+
+VOID XunCheckGpuOwner(VOID)
+{
+    g_XunGpuOwnsPanel = DsdtHasGpu0();
+}
 
 VOID XunBlInit(VOID)
 {

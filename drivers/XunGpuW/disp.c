@@ -29,6 +29,7 @@ static DXGK_DISPLAY_INFORMATION g_Post;
 static PUCHAR g_Fb;                             /* WC mapping of the framebuffer */
 static BOOLEAN g_Visible = TRUE;
 static BOOLEAN g_Committed;
+static XUN_QUP_LOCK g_BlQupLock;
 
 static TGPU_ALLOCATION * volatile g_ScanCur;    /* primary being "scanned out" */
 
@@ -1042,7 +1043,6 @@ static PHYSICAL_ADDRESS g_BlPa;
 static UCHAR g_Brightness = 80;
 static BOOLEAN g_KtzOn = TRUE;
 static KMUTEX g_BlLock;
-static XUN_QUP_LOCK g_BlQupLock;
 
 static ULONG DsiRd(ULONG Off) { return READ_REGISTER_ULONG((volatile ULONG *)(g_Dsi + Off)); }
 static VOID DsiWr(ULONG Off, ULONG V) { WRITE_REGISTER_ULONG((volatile ULONG *)(g_Dsi + Off), V); }
