@@ -19,7 +19,7 @@ Windows 11 on ARM64 driver stack and Mesa UMD for **Xiaomi Redmi Pad SE** (`xun`
 
 ## IPC / Shared Constants
 - `XunGpuW/xungpu_escape.h` and `mesa-overlay/files/src/freedreno/drm/wddm/xungpu_escape.h` share `XUNGPU_ESC_MAGIC = 0x55504758u` (`'XGPU'`) and `XUNGPU_ALLOC_MAGIC = 0x41475058u` (`'XPGA'`).
-- Multi-driver `QUP0 SE1` / `SE2` I2C transactions synchronize via named kernel mutants (`\BaseNamedObjects\XunQup0Se1Lock` and `\BaseNamedObjects\XunQup0Se2Lock` in `drivers/common/xun_qup_lock.h`).
+- Multi-driver `QUP0 SE1` / `SE2` I2C transactions synchronize via named kernel SynchronizationEvents (`\BaseNamedObjects\XunQup0Se1Lock` and `\BaseNamedObjects\XunQup0Se2Lock` via `IoCreateSynchronizationEvent` in `drivers/common/xun_qup_lock.h`).
 
 ## Option 1 Dual-OS Slot Layout
 

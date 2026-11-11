@@ -31,11 +31,19 @@ unbind_links() {
 
 if [ "$TARGET" = "off" ]; then
   if [ -d "$GADGET" ] && [ -d "$GADGET/functions/ffs.mtp" ] && [ -d "$GADGET/functions/ffs.adb" ]; then
+    UDC="$(cat "$GADGET/UDC" 2>/dev/null)"
+    [ -n "$UDC" ] && [ "$UDC" != "none" ] && [ "$UDC" != "" ] || UDC="$(getprop sys.usb.controller)"
+    [ -n "$UDC" ] || UDC="$(ls /sys/class/udc 2>/dev/null | head -n 1)"
+    unbind_links
     clear_lun
+    echo 0x2717 > "$GADGET/idVendor"
+    echo 0xff48 > "$GADGET/idProduct"
+    echo "mtp_adb" > "$CFG/strings/0x409/configuration" 2>/dev/null || true
+    ln -s "$GADGET/functions/ffs.mtp" "$CFG/f1"
+    ln -s "$GADGET/functions/ffs.adb" "$CFG/f2"
+    echo "$UDC" > "$GADGET/UDC"
     command -v twrp >/dev/null 2>&1 && twrp set tw_mtp_enabled 1 2>/dev/null || true
-    setprop sys.usb.config none
-    sleep 1
-    setprop sys.usb.config mtp,adb
+    start adbd 2>/dev/null || true
   else
     clear_lun
   fi
