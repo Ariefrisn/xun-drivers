@@ -491,6 +491,7 @@ NTSTATUS DispSetSourceAddress(const DXGKARG_SETVIDPNSOURCEADDRESS *A)
 }
 
 static VOID BlPanel(BOOLEAN On);
+static BOOLEAN DispFileExists(PCWSTR Path);
 
 NTSTATUS DispSetVisibility(const DXGKARG_SETVIDPNSOURCEVISIBILITY *A)
 {
