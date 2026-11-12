@@ -266,9 +266,12 @@ NTSTATUS FtsSpiRead(PGENI_SPI Bus, UCHAR Reg, UCHAR *Buf, ULONG Len)
         status = STATUS_CRC_ERROR;
         KeStallExecutionProcessor(300);
     }
-    LogPrint("FtsSpiRead busy/crc reg=%02x len=%lu rx0..3=%02x %02x %02x %02x calc=%04x rx=%04x\n",
+    LogPrint("FtsSpiRead busy/crc reg=%02x len=%lu rx0..3=%02x %02x %02x %02x rx4..9=%02x %02x %02x %02x %02x %02x calc=%04x rx=%04x\n",
              Reg, Len, Bus->RxScratch[0], Bus->RxScratch[1],
-             Bus->RxScratch[2], Bus->RxScratch[3], lastCalcCrc, lastRxCrc);
+             Bus->RxScratch[2], Bus->RxScratch[3],
+             Bus->RxScratch[4], Bus->RxScratch[5], Bus->RxScratch[6],
+             Bus->RxScratch[7], Bus->RxScratch[8], Bus->RxScratch[9],
+             lastCalcCrc, lastRxCrc);
     return NT_SUCCESS(status) ? STATUS_DEVICE_BUSY : status;
 }
 

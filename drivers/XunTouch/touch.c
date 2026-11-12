@@ -312,6 +312,43 @@ static NTSTATUS FtsTryUploadPramPath(PDEVICE_CONTEXT Ctx, PCWSTR ForcePath) {
     KeStallExecutionProcessor(500);
     off += chunk;
   }
+
+  {
+    USHORT eccHost = 0;
+    ULONG b;
+    UCHAR eccCmd[7] = {
+        0xCC, 0x00, 0x00, 0x00,
+        (UCHAR)((fwLen >> 16) & 0xFF),
+        (UCHAR)((fwLen >> 8) & 0xFF),
+        (UCHAR)(fwLen & 0xFF)
+    };
+    NTSTATUS eccSt;
+    UCHAR eccDone = 0xFF, eccVal[2] = {0};
+    NTSTATUS eccRdSt;
+    USHORT eccTp;
+
+    for (i = 0; i + 1 < fwLen; i += 2) {
+      eccHost ^= (USHORT)((fw[i] << 8) | fw[i + 1]);
+      for (b = 0; b < 16; b++) {
+        eccHost = (eccHost & 1) ? (USHORT)((eccHost >> 1) ^ 0x8408)
+                                : (USHORT)(eccHost >> 1);
+      }
+    }
+
+    eccSt = FtsSpiWrite(&Ctx->Bus, eccCmd, 7);
+    for (i = 0; i < 100; i++) {
+      SleepMs(1);
+      if (NT_SUCCESS(FtsSpiRead(&Ctx->Bus, 0xCE, &eccDone, 1)) &&
+          eccDone == 0) {
+        break;
+      }
+    }
+    eccRdSt = FtsSpiRead(&Ctx->Bus, 0xCD, eccVal, 2);
+    eccTp = (USHORT)((eccVal[0] << 8) | eccVal[1]);
+    LogPrint("pram: ecc_wr=%08x done=%02x ecc_rd=%08x ecc_host=%04x ecc_tp=%04x\n",
+             eccSt, eccDone, eccRdSt, eccHost, eccTp);
+  }
+
   ExFreePoolWithTag(fw, XUN_POOL_TAG);
 
   cmd = 0x08; /* start PRAM app */
