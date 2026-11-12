@@ -258,7 +258,7 @@ static NTSTATUS FtsTryUploadPramPath(PDEVICE_CONTEXT Ctx, PCWSTR ForcePath) {
       L"\\??\\C:\\xun\\fw\\focaltech_ts_fw_boe_ft8203.bin"};
   PUCHAR fw = NULL;
   ULONG fwLen = 0, i, off = 0;
-  UCHAR pkt[4 + 256], cmd, romId[2] = {0};
+  UCHAR pkt[1 + 256], cmd, romId[2] = {0};
   NTSTATUS status;
 
   if (ForcePath != NULL) {
@@ -302,11 +302,8 @@ static NTSTATUS FtsTryUploadPramPath(PDEVICE_CONTEXT Ctx, PCWSTR ForcePath) {
   while (off < fwLen) {
     ULONG chunk = min(256u, fwLen - off);
     pkt[0] = 0xAE;
-    pkt[1] = (UCHAR)((off >> 16) & 0xFF);
-    pkt[2] = (UCHAR)((off >> 8) & 0xFF);
-    pkt[3] = (UCHAR)(off & 0xFF);
-    RtlCopyMemory(pkt + 4, fw + off, chunk);
-    status = FtsSpiWrite(&Ctx->Bus, pkt, 4 + chunk);
+    RtlCopyMemory(pkt + 1, fw + off, chunk);
+    status = FtsSpiWrite(&Ctx->Bus, pkt, 1 + chunk);
     if (!NT_SUCCESS(status)) {
       LogPrint("pram: write err off=%lu status=%08x\n", off, status);
       ExFreePoolWithTag(fw, XUN_POOL_TAG);

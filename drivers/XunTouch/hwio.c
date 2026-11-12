@@ -201,20 +201,11 @@ static USHORT FtsCrc16(const UCHAR *Data, ULONG Len)
 
 NTSTATUS FtsSpiWrite(PGENI_SPI Bus, const UCHAR *Buf, ULONG Len)
 {
-    ULONG hdrExtra;
-    ULONG xfer;
+    ULONG xfer = (Len > 1) ? (Len + 6) : 4;
     ULONG attempt;
     NTSTATUS status = STATUS_INVALID_PARAMETER;
 
-    if (Buf == NULL) {
-        return STATUS_INVALID_PARAMETER;
-    }
-    if (Len == 0) {
-        return STATUS_BUFFER_TOO_SMALL;
-    }
-    hdrExtra = (Buf[0] == 0xAE) ? 3u : 6u;
-    xfer = (Len > 1) ? (Len + hdrExtra) : 4u;
-    if (xfer > Bus->ScratchSize) {
+    if (Len == 0 || xfer > Bus->ScratchSize) {
         return STATUS_BUFFER_TOO_SMALL;
     }
     for (attempt = 0; attempt < 3; attempt++) {
@@ -225,14 +216,7 @@ NTSTATUS FtsSpiWrite(PGENI_SPI Bus, const UCHAR *Buf, ULONG Len)
         Bus->TxScratch[2] = (UCHAR)(((Len - 1) >> 8) & 0xFF);
         Bus->TxScratch[3] = (UCHAR)((Len - 1) & 0xFF);
         if (Len > 1) {
-            if (Buf[0] == 0xAE) {
-                RtlCopyMemory(Bus->TxScratch + 4, Buf + 1, Len - 1);
-            } else {
-                Bus->TxScratch[4] = 0x00;
-                Bus->TxScratch[5] = 0x00;
-                Bus->TxScratch[6] = 0x00;
-                RtlCopyMemory(Bus->TxScratch + 7, Buf + 1, Len - 1);
-            }
+            RtlCopyMemory(Bus->TxScratch + 7, Buf + 1, Len - 1);
         }
         status = GeniSpiXfer(Bus, Bus->TxScratch, Bus->RxScratch, xfer);
         if (NT_SUCCESS(status) && (Bus->RxScratch[3] & 0xA0) == 0) {
@@ -282,12 +266,9 @@ NTSTATUS FtsSpiRead(PGENI_SPI Bus, UCHAR Reg, UCHAR *Buf, ULONG Len)
         status = STATUS_CRC_ERROR;
         KeStallExecutionProcessor(300);
     }
-    LogPrint("FtsSpiRead busy/crc reg=%02x len=%lu rx0..3=%02x %02x %02x %02x rx4..9=%02x %02x %02x %02x %02x %02x calc=%04x rx=%04x\n",
+    LogPrint("FtsSpiRead busy/crc reg=%02x len=%lu rx0..3=%02x %02x %02x %02x calc=%04x rx=%04x\n",
              Reg, Len, Bus->RxScratch[0], Bus->RxScratch[1],
-             Bus->RxScratch[2], Bus->RxScratch[3],
-             Bus->RxScratch[4], Bus->RxScratch[5], Bus->RxScratch[6],
-             Bus->RxScratch[7], Bus->RxScratch[8], Bus->RxScratch[9],
-             lastCalcCrc, lastRxCrc);
+             Bus->RxScratch[2], Bus->RxScratch[3], lastCalcCrc, lastRxCrc);
     return NT_SUCCESS(status) ? STATUS_DEVICE_BUSY : status;
 }
 
