@@ -7,6 +7,7 @@
 
 #include <ntddk.h>
 #include <ntstrsafe.h>
+#include <intrin.h>
 
 #pragma warning(disable: 4201 4214 4100 4189 4244 4245 4267 4389 4706 4127 4057 4152)
 
@@ -49,7 +50,7 @@ typedef UINT64     EFI_PHYSICAL_ADDRESS;
 #define CopyMem(d, s, n)       RtlCopyMemory ((d), (s), (n))
 #define ZeroMem(d, n)          RtlZeroMemory ((d), (n))
 #define CompareMem(a, b, n)    ((RtlCompareMemory ((a), (b), (n)) == (SIZE_T)(n)) ? 0 : 1)
-#define MemoryFence()          KeMemoryBarrier ()
+#define MemoryFence()          __dsb (_ARM64_BARRIER_SY)
 #define MmioRead32(a)          READ_REGISTER_ULONG ((volatile ULONG *)(UINTN)(a))
 #define MmioWrite32(a, v)      WRITE_REGISTER_ULONG ((volatile ULONG *)(UINTN)(a), (ULONG)(v))
 #define WriteBackDataCacheRange(p, n)            /* buffers shared with the modem are non-cached */

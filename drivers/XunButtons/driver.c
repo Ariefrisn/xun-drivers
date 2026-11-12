@@ -82,6 +82,7 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DEVICE_CONTEXT, DeviceGetContext)
 
 DRIVER_INITIALIZE DriverEntry;
 static EVT_WDF_DRIVER_UNLOAD EvtDriverUnload;
+static volatile LONG g_DeviceCount;
 static EVT_WDF_DRIVER_DEVICE_ADD EvtDeviceAdd;
 static EVT_WDF_DEVICE_PREPARE_HARDWARE EvtPrepareHardware;
 static EVT_WDF_DEVICE_RELEASE_HARDWARE EvtReleaseHardware;
@@ -431,6 +432,11 @@ static NTSTATUS EvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit) {
   NTSTATUS status;
 
   UNREFERENCED_PARAMETER(Driver);
+  if (InterlockedIncrement(&g_DeviceCount) > 1) {
+    InterlockedDecrement(&g_DeviceCount);
+    LogPrint("XunButtons: duplicate device node detected, rejecting duplicate instance\n");
+    return STATUS_DEVICE_ALREADY_ATTACHED;
+  }
   WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
   pnp.EvtDevicePrepareHardware = EvtPrepareHardware;
   pnp.EvtDeviceReleaseHardware = EvtReleaseHardware;
@@ -441,6 +447,7 @@ static NTSTATUS EvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit) {
   WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attrs, DEVICE_CONTEXT);
   status = WdfDeviceCreate(&DeviceInit, &attrs, &device);
   if (!NT_SUCCESS(status)) {
+    InterlockedDecrement(&g_DeviceCount);
     return status;
   }
   ctx = DeviceGetContext(device);
@@ -479,6 +486,7 @@ static NTSTATUS EvtReleaseHardware(WDFDEVICE Device, WDFCMRESLIST Translated) {
     ctx->Vhf = NULL;
   }
   HwDeinit(ctx);
+  InterlockedDecrement(&g_DeviceCount);
   return STATUS_SUCCESS;
 }
 

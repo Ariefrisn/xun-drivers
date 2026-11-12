@@ -7,6 +7,7 @@
 
 DRIVER_INITIALIZE DriverEntry;
 static EVT_WDF_DRIVER_UNLOAD XunEvtDriverUnload;
+static volatile LONG g_DeviceCount;
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
@@ -43,6 +44,12 @@ NTSTATUS XunEvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
 
     UNREFERENCED_PARAMETER(Driver);
 
+    if (InterlockedIncrement(&g_DeviceCount) > 1) {
+        InterlockedDecrement(&g_DeviceCount);
+        LogPrint("XunBattery: duplicate device node detected, rejecting duplicate instance\n");
+        return STATUS_DEVICE_ALREADY_ATTACHED;
+    }
+
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
     pnp.EvtDevicePrepareHardware = XunEvtPrepareHardware;
     pnp.EvtDeviceReleaseHardware = XunEvtReleaseHardware;
@@ -62,6 +69,7 @@ NTSTATUS XunEvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
     status = WdfDeviceCreate(&DeviceInit, &attrs, &device);
     LogPrint("WdfDeviceCreate: %08x\n", status);
     if (!NT_SUCCESS(status)) {
+        InterlockedDecrement(&g_DeviceCount);
         return status;
     }
     ctx = DeviceGetContext(device);
@@ -103,6 +111,7 @@ NTSTATUS XunEvtReleaseHardware(WDFDEVICE Device, WDFCMRESLIST Translated)
     UNREFERENCED_PARAMETER(Translated);
     BattClassUnload(ctx);
     BattHwDeinit(ctx);
+    InterlockedDecrement(&g_DeviceCount);
     return STATUS_SUCCESS;
 }
 

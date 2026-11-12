@@ -445,6 +445,21 @@ static VOID ChargerPolicy(PDEVICE_CONTEXT Ctx, UCHAR R03, UCHAR R0B, BOOLEAN All
     }
 }
 
+static NTSTATUS FgReadWordRetry(PI2C_BUS Bus, UCHAR Addr, UCHAR Reg, PUSHORT Val)
+{
+    NTSTATUS s = STATUS_UNSUCCESSFUL;
+    ULONG tries;
+
+    for (tries = 0; tries < 3; tries++) {
+        s = I2cReadWord(Bus, Addr, Reg, Val);
+        if (NT_SUCCESS(s)) {
+            return s;
+        }
+        KeStallExecutionProcessor(200);
+    }
+    return s;
+}
+
 VOID BattPoll(PDEVICE_CONTEXT Ctx)
 {
     BATT_SNAPSHOT s;
@@ -452,7 +467,7 @@ VOID BattPoll(PDEVICE_CONTEXT Ctx)
     NTSTATUS fgErr = STATUS_UNSUCCESSFUL;
     KIRQL irql;
     ULONG state, notifySoc;
-    BOOLEAN notify;
+    BOOLEAN notify, fgOk;
 
     if (!Ctx->HwReady) {
         return;
@@ -461,19 +476,20 @@ VOID BattPoll(PDEVICE_CONTEXT Ctx)
 
     if (Ctx->FgReady) {
         fgErr = STATUS_SUCCESS;
-        fgErr |= I2cReadWord(&Ctx->FgBus, FG_ADDR, FG_REG_TEMP, &tempK);
-        fgErr |= I2cReadWord(&Ctx->FgBus, FG_ADDR, FG_REG_VOLTAGE, &volt);
-        fgErr |= I2cReadWord(&Ctx->FgBus, FG_ADDR, FG_REG_FLAGS, &flags);
-        fgErr |= I2cReadWord(&Ctx->FgBus, FG_ADDR, FG_REG_RM, &rm);
-        fgErr |= I2cReadWord(&Ctx->FgBus, FG_ADDR, FG_REG_FCC, &fcc);
-        fgErr |= I2cReadWord(&Ctx->FgBus, FG_ADDR, FG_REG_CURRENT, &curr);
-        fgErr |= I2cReadWord(&Ctx->FgBus, FG_ADDR, FG_REG_CYCLE, &cyc);
-        fgErr |= I2cReadWord(&Ctx->FgBus, FG_ADDR, FG_REG_SOC, &soc);
+        fgErr |= FgReadWordRetry(&Ctx->FgBus, FG_ADDR, FG_REG_TEMP, &tempK);
+        fgErr |= FgReadWordRetry(&Ctx->FgBus, FG_ADDR, FG_REG_VOLTAGE, &volt);
+        fgErr |= FgReadWordRetry(&Ctx->FgBus, FG_ADDR, FG_REG_FLAGS, &flags);
+        fgErr |= FgReadWordRetry(&Ctx->FgBus, FG_ADDR, FG_REG_RM, &rm);
+        fgErr |= FgReadWordRetry(&Ctx->FgBus, FG_ADDR, FG_REG_FCC, &fcc);
+        fgErr |= FgReadWordRetry(&Ctx->FgBus, FG_ADDR, FG_REG_CURRENT, &curr);
+        fgErr |= FgReadWordRetry(&Ctx->FgBus, FG_ADDR, FG_REG_CYCLE, &cyc);
+        fgErr |= FgReadWordRetry(&Ctx->FgBus, FG_ADDR, FG_REG_SOC, &soc);
     }
     I2cReadByte(&Ctx->Bus, CHG_ADDR, CHG_REG03, &s.ChgReg03);
     I2cReadByte(&Ctx->Bus, CHG_ADDR, CHG_REG0B, &s.ChgReg0B);
 
-    s.Valid = NT_SUCCESS(fgErr) && volt >= 2500 && volt <= 5000;
+    fgOk = NT_SUCCESS(fgErr) && volt >= 2500 && volt <= 5000;
+    s.Valid = fgOk;
     s.Present = TRUE;
     s.SocTenths = min(soc, 100u) * 10;
     s.VoltageMv = volt;
@@ -481,6 +497,24 @@ VOID BattPoll(PDEVICE_CONTEXT Ctx)
     s.TempTenthsC = (LONG)tempK - 2731;
     s.FullMah = (fcc >= 1000 && fcc <= 12000) ? fcc : BATT_DESIGN_MAH;
     s.Cycles = cyc;
+
+    if (!fgOk) {
+        KeAcquireSpinLock(&Ctx->SnapLock, &irql);
+        if (Ctx->Snap.Valid) {
+            s.Valid = TRUE;
+            s.SocTenths = Ctx->Snap.SocTenths;
+            s.VoltageMv = Ctx->Snap.VoltageMv;
+            s.CurrentMa = Ctx->Snap.CurrentMa;
+            s.TempTenthsC = Ctx->Snap.TempTenthsC;
+            s.FullMah = Ctx->Snap.FullMah;
+            s.Cycles = Ctx->Snap.Cycles;
+            KeReleaseSpinLock(&Ctx->SnapLock, irql);
+            LogPrint("poll: fg transient %08x, keeping last snapshot v=%umV soc=%u%%\n",
+                     fgErr, s.VoltageMv, s.SocTenths / 10);
+        } else {
+            KeReleaseSpinLock(&Ctx->SnapLock, irql);
+        }
+    }
 
     s.OnLine = CHG_VBUS_STAT(s.ChgReg0B) >= 1 && CHG_VBUS_STAT(s.ChgReg0B) <= 6 && CHG_PG_STAT(s.ChgReg0B);
     s.Charging = s.OnLine && (CHG_CHRG_STAT(s.ChgReg0B) == 1 || CHG_CHRG_STAT(s.ChgReg0B) == 2);
@@ -495,7 +529,7 @@ VOID BattPoll(PDEVICE_CONTEXT Ctx)
     }
 
     {
-        ULONG zone = s.Valid ? JeitaUpdate(Ctx, s.TempTenthsC) : Ctx->JeitaZone;
+        ULONG zone = fgOk ? JeitaUpdate(Ctx, s.TempTenthsC) : Ctx->JeitaZone;
         BOOLEAN allow = (zone >= JEITA_ZONES || g_Jeita[zone].IchgMa != 0);
 
         ChargerPolicy(Ctx, s.ChgReg03, s.ChgReg0B, allow);

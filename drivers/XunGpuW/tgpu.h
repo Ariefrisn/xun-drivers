@@ -39,6 +39,7 @@ typedef struct _TGPU_BO {
     LONG        Refs;
     SIZE_T      Size;                           /* page multiple */
     ULONG       Flags;                          /* MSM_BO_* */
+    UCHAR       Madv;                           /* MSM_MADV_* */
     PMDL        Mdl;                            /* backing pages */
     PVOID       KernelVa;                       /* write-combined kernel mapping (lazy) */
     ULONGLONG   Iova;                           /* GPU VA */

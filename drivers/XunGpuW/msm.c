@@ -60,17 +60,81 @@ static VOID BoUnmapAll(TGPU_BO *Bo, PEPROCESS OnlyProcess)
     }
 }
 
-static VOID BoFree(TGPU_BO *Bo)
+#define GEM_SOFT_LIMIT_BYTES    (512ULL * 1024 * 1024)
+
+static ULONG g_GemFailCount;
+
+static BOOLEAN BoCanUnmapSafely(TGPU_BO *Bo)
 {
+    PLIST_ENTRY e;
+    PEPROCESS cur = PsGetCurrentProcess();
+
+    for (e = Bo->Maps.Flink; e != &Bo->Maps; e = e->Flink) {
+        TGPU_MAP *m = CONTAINING_RECORD(e, TGPU_MAP, Link);
+        if (m->Process != cur) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static VOID BoPurge(TGPU_BO *Bo)
+{
+    if (Bo->Mdl == NULL) {
+        return;
+    }
     if (!HwWedged()) {
         HwWaitFence(Bo->LastFence, 500);
     }
     BoUnmapAll(Bo, NULL);
     TgFreePages(Bo->Mdl, Bo->KernelVa, Bo->Size, Bo->Iova);
+    Bo->Mdl = NULL;
+    Bo->KernelVa = NULL;
+    Bo->Iova = 0;
+    Bo->Madv = __MSM_MADV_PURGED;
+    g_BoBytes -= Bo->Size;
+}
+
+/*
+ * Reclaim backing pages of MSM_MADV_DONTNEED BOs oldest-first. When NeedBytes > 0
+ * (a contiguous allocation just failed), purge all eligible BOs to aid coalescing.
+ */
+static SIZE_T BoShrink(SIZE_T NeedBytes)
+{
+    PLIST_ENTRY e, next;
+    SIZE_T purged = 0;
+
+    for (e = g_Bos.Flink; e != &g_Bos; e = next) {
+        TGPU_BO *bo = CONTAINING_RECORD(e, TGPU_BO, Link);
+        next = e->Flink;
+        if (NeedBytes == 0 && g_BoBytes <= GEM_SOFT_LIMIT_BYTES) {
+            break;
+        }
+        if (bo->Mdl != NULL && bo->Madv == MSM_MADV_DONTNEED &&
+            bo->Refs <= 1 && BoCanUnmapSafely(bo)) {
+            purged += bo->Size;
+            BoPurge(bo);
+        }
+    }
+    return purged;
+}
+
+static VOID BoFree(TGPU_BO *Bo)
+{
+    if (Bo->Mdl != NULL) {
+        if (!HwWedged()) {
+            HwWaitFence(Bo->LastFence, 500);
+        }
+        BoUnmapAll(Bo, NULL);
+        TgFreePages(Bo->Mdl, Bo->KernelVa, Bo->Size, Bo->Iova);
+        Bo->Mdl = NULL;
+        Bo->KernelVa = NULL;
+        Bo->Iova = 0;
+        g_BoBytes -= Bo->Size;
+    }
     g_BoTable[Bo->Handle] = NULL;
     RemoveEntryList(&Bo->Link);
     g_BoCount--;
-    g_BoBytes -= Bo->Size;
     ExFreePoolWithTag(Bo, TGPU_POOL_TAG);
 }
 
@@ -144,6 +208,7 @@ static NTSTATUS GemNew(struct drm_msm_gem_new *A)
     InitializeListHead(&bo->Maps);
     bo->Size = ROUND_TO_PAGES((SIZE_T)A->size);
     bo->Flags = A->flags;
+    bo->Madv = MSM_MADV_WILLNEED;
     bo->Refs = 1;
     lo.QuadPart = 0;
     hi.QuadPart = 0xFFFFFFFF;                          /* v0.14: walks/fetches above 4 GB faulted */
@@ -151,10 +216,22 @@ static NTSTATUS GemNew(struct drm_msm_gem_new *A)
     UNREFERENCED_PARAMETER(lo);
     UNREFERENCED_PARAMETER(hi);
     UNREFERENCED_PARAMETER(skip);
+    if (g_BoBytes > GEM_SOFT_LIMIT_BYTES) {
+        BoShrink(0);
+    }
     bo->Mdl = TgAllocPages(bo->Size, &bo->Iova, &bo->KernelVa);
     if (bo->Mdl == NULL) {
-        LogPrint("GEM_NEW: %llu KB contiguous failed (%u BOs / %llu KB allocated)\n", (ULONGLONG)bo->Size / 1024,
-                 g_BoCount, g_BoBytes / 1024);
+        SIZE_T reclaimed = BoShrink(bo->Size);
+        if (reclaimed > 0) {
+            bo->Mdl = TgAllocPages(bo->Size, &bo->Iova, &bo->KernelVa);
+        }
+    }
+    if (bo->Mdl == NULL) {
+        g_GemFailCount++;
+        if (g_GemFailCount <= 8 || (g_GemFailCount & 0xFF) == 0) {
+            LogPrint("GEM_NEW: %llu KB contiguous failed (%u BOs / %llu KB allocated, fail #%u)\n",
+                     (ULONGLONG)bo->Size / 1024, g_BoCount, g_BoBytes / 1024, g_GemFailCount);
+        }
         ExFreePoolWithTag(bo, TGPU_POOL_TAG);
         return STATUS_NO_MEMORY;
     }
@@ -184,7 +261,7 @@ static NTSTATUS GemInfo(struct drm_msm_gem_info *A)
 {
     TGPU_BO *bo = BoGet(A->handle);
 
-    if (bo == NULL) {
+    if (bo == NULL || bo->Mdl == NULL) {
         return STATUS_INVALID_HANDLE;
     }
     switch (A->info) {
@@ -211,7 +288,7 @@ static NTSTATUS Mmap(struct xungpu_mmap *A)
     TGPU_MAP *m;
     PVOID va = NULL;
 
-    if (bo == NULL) {
+    if (bo == NULL || bo->Mdl == NULL) {
         return STATUS_INVALID_HANDLE;
     }
     m = (TGPU_MAP *)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(*m), TGPU_POOL_TAG);
@@ -325,7 +402,8 @@ static NTSTATUS Submit(struct drm_msm_gem_submit *A)
         goto out;
     }
     for (i = 0; i < A->nr_bos; i++) {
-        if (BoGet(bos[i].handle) == NULL) {
+        bo = BoGet(bos[i].handle);
+        if (bo == NULL || bo->Mdl == NULL) {
             st = STATUS_INVALID_HANDLE;
             goto out;
         }
@@ -462,9 +540,24 @@ NTSTATUS MsmEscape(struct xungpu_escape *E, PVOID Owner)
     }
     case DRM_COMMAND_BASE + DRM_MSM_GEM_CPU_FINI:
         break;
-    case DRM_COMMAND_BASE + DRM_MSM_GEM_MADVISE:
-        ((struct drm_msm_gem_madvise *)d)->retained = 1;
+    case DRM_COMMAND_BASE + DRM_MSM_GEM_MADVISE: {
+        struct drm_msm_gem_madvise *m = (struct drm_msm_gem_madvise *)d;
+        bo = BoGet(m->handle);
+        if (bo == NULL) {
+            st = STATUS_INVALID_HANDLE;
+        } else if (bo->Mdl == NULL || bo->Madv == __MSM_MADV_PURGED) {
+            m->retained = 0;
+        } else {
+            if (m->madv == MSM_MADV_WILLNEED || m->madv == MSM_MADV_DONTNEED) {
+                bo->Madv = (UCHAR)m->madv;
+            }
+            if (bo->Madv == MSM_MADV_DONTNEED && g_BoBytes > GEM_SOFT_LIMIT_BYTES) {
+                BoShrink(0);
+            }
+            m->retained = (bo->Mdl != NULL && bo->Madv != __MSM_MADV_PURGED) ? 1 : 0;
+        }
         break;
+    }
     case DRM_COMMAND_BASE + DRM_MSM_GEM_SUBMIT:
         st = Submit((struct drm_msm_gem_submit *)d);
         break;
@@ -497,14 +590,15 @@ NTSTATUS MsmEscape(struct xungpu_escape *E, PVOID Owner)
         break;
     case XUNGPU_NR_GEM_FLINK: {
         struct drm_gem_flink *f = (struct drm_gem_flink *)d;
-        st = BoGet(f->handle) != NULL ? STATUS_SUCCESS : STATUS_INVALID_HANDLE;
+        bo = BoGet(f->handle);
+        st = (bo != NULL && bo->Mdl != NULL) ? STATUS_SUCCESS : STATUS_INVALID_HANDLE;
         f->name = f->handle;
         break;
     }
     case XUNGPU_NR_GEM_OPEN: {
         struct drm_gem_open *o = (struct drm_gem_open *)d;
         bo = BoGet(o->name);
-        if (bo == NULL) {
+        if (bo == NULL || bo->Mdl == NULL) {
             st = STATUS_INVALID_HANDLE;
         } else {
             bo->Refs++;
@@ -544,8 +638,10 @@ TGPU_BO *MsmBoAcquire(ULONG Name)
 
     KeWaitForSingleObject(&g_BoLock, Executive, KernelMode, FALSE, NULL);
     bo = BoGet(Name);
-    if (bo != NULL) {
+    if (bo != NULL && bo->Mdl != NULL) {
         bo->Refs++;
+    } else {
+        bo = NULL;
     }
     KeReleaseMutex(&g_BoLock, FALSE);
     return bo;

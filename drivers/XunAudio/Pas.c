@@ -270,6 +270,7 @@ STATIC EFI_STATUS AdspLoad(EFI_FILE_PROTOCOL *Root)
     }
   }
 
+  MemoryFence ();
   st = Scm (SCM_FN (SCM_SVC_PIL, PIL_INIT_IMAGE), SCM_ARGS (2) | (SCM_ARG_RW << 6), ADSP_PAS_ID, (UINTN)metaPa, 0, &res);
   Out ("  PAS init_image: ret=%lx res=%lx resumes=%lu (meta %lu bytes)\r\n", (UINT64)st, (UINT64)res, (UINT64)mScmResumes, (UINT64)metaSize);
   if (st != 0 || res != 0) {
@@ -493,7 +494,17 @@ EFI_STATUS AdspBoot(VOID)
   *mStopEntry = 0;
   ApcsKick (ADSP_SMP2P_BIT);
 
-  s = AdspLoad (FwRoot ());
+  for (UINTN attempt = 1; attempt <= 3; attempt++) {
+    s = AdspLoad (FwRoot ());
+    if (!EFI_ERROR (s)) {
+      break;
+    }
+    Out ("  AdspLoad attempt %lu/3 failed: %r\r\n", (UINT64)attempt, s);
+    if (attempt < 3) {
+      PasShutdown ();
+      gBS->Stall (50000);
+    }
+  }
   if (EFI_ERROR (s)) {
     return s;
   }

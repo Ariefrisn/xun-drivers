@@ -22,6 +22,7 @@ static EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL XunEvtIoctl;
 
 static PKTHREAD g_Thread;
 static BOOLEAN  g_Started;
+static volatile LONG g_DeviceCount;
 
 /* Consume a one-shot file (C:\xun\audio.arm, C:\xun\amp.probe): TRUE if it existed. */
 static BOOLEAN ArmConsume(PCWSTR Path)
@@ -122,6 +123,11 @@ static NTSTATUS XunEvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
     NTSTATUS status;
 
     UNREFERENCED_PARAMETER(Driver);
+    if (InterlockedIncrement(&g_DeviceCount) > 1) {
+        InterlockedDecrement(&g_DeviceCount);
+        LogPrint("XunAudio: duplicate device node detected, rejecting duplicate instance\r\n");
+        return STATUS_DEVICE_ALREADY_ATTACHED;
+    }
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
     pnp.EvtDeviceD0Entry = XunEvtD0Entry;
     pnp.EvtDeviceD0Exit = XunEvtD0Exit;
@@ -129,6 +135,7 @@ static NTSTATUS XunEvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
     status = WdfDeviceCreate(&DeviceInit, WDF_NO_OBJECT_ATTRIBUTES, &device);
     LogPrint("WdfDeviceCreate: %08x\r\n", status);
     if (!NT_SUCCESS(status)) {
+        InterlockedDecrement(&g_DeviceCount);
         return status;
     }
     WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&qcfg, WdfIoQueueDispatchSequential);
