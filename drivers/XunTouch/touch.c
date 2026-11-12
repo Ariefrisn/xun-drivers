@@ -294,6 +294,11 @@ static NTSTATUS FtsTryUploadPramPath(PDEVICE_CONTEXT Ctx, PCWSTR ForcePath) {
     return status;
   }
 
+  if (fwLen >= 8) {
+    LogPrint("pram: hdr=%02x %02x %02x %02x %02x %02x %02x %02x\n",
+             fw[0], fw[1], fw[2], fw[3], fw[4], fw[5], fw[6], fw[7]);
+  }
+
   while (off < fwLen) {
     ULONG chunk = min(256u, fwLen - off);
     pkt[0] = 0xAE;
@@ -309,6 +314,34 @@ static NTSTATUS FtsTryUploadPramPath(PDEVICE_CONTEXT Ctx, PCWSTR ForcePath) {
     }
     KeStallExecutionProcessor(500);
     off += chunk;
+  }
+
+  if (fwLen >= 256u) {
+    USHORT ecc256Host = 0;
+    ULONG b256;
+    UCHAR ecc256Cmd[7] = {0xCC, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00};
+    UCHAR ecc256Done = 0xFF, ecc256Val[2] = {0};
+    USHORT ecc256Tp;
+
+    for (i = 0; i + 1 < 256u; i += 2) {
+      ecc256Host ^= (USHORT)((fw[i] << 8) | fw[i + 1]);
+      for (b256 = 0; b256 < 16; b256++) {
+        ecc256Host = (ecc256Host & 1) ? (USHORT)((ecc256Host >> 1) ^ 0x8408)
+                                      : (USHORT)(ecc256Host >> 1);
+      }
+    }
+
+    (void)FtsSpiWrite(&Ctx->Bus, ecc256Cmd, 7);
+    for (i = 0; i < 100; i++) {
+      SleepMs(1);
+      if (NT_SUCCESS(FtsSpiRead(&Ctx->Bus, 0xCE, &ecc256Done, 1)) &&
+          (ecc256Done == 0 || ecc256Done == 0xA5)) {
+        break;
+      }
+    }
+    (void)FtsSpiRead(&Ctx->Bus, 0xCD, ecc256Val, 2);
+    ecc256Tp = (USHORT)((ecc256Val[0] << 8) | ecc256Val[1]);
+    LogPrint("pram: ecc256_host=%04x ecc256_tp=%04x\n", ecc256Host, ecc256Tp);
   }
 
   {
