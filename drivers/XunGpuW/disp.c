@@ -1090,9 +1090,18 @@ NTSTATUS DispEnumCofuncModality(PDXGKRNL_INTERFACE Dxgk, const DXGKARG_ENUMVIDPN
         if (modified) {
             st = ti->pfnUpdatePathSupportInfo(topo, &local);
             if (!NT_SUCCESS(st)) {
+                LogPrint("EnumVidPn %p pivot %u UpdatePathSupportInfo -> %08x\n", A->hConstrainingVidPn, A->EnumPivotType,
+                         st);
                 break;
             }
         }
+        LogPrint("EnumVidPn %p pivot %u src %ux%u scal %u rot %u mod %u (rotSup I%u/90=%u/180=%u/270=%u/off=%u)\n",
+                 A->hConstrainingVidPn, A->EnumPivotType, spinW, spinH, (ULONG)path->ContentTransformation.Scaling,
+                 (ULONG)pathRot, modified, (ULONG)local.ContentTransformation.RotationSupport.Identity,
+                 (ULONG)local.ContentTransformation.RotationSupport.Rotate90,
+                 (ULONG)local.ContentTransformation.RotationSupport.Rotate180,
+                 (ULONG)local.ContentTransformation.RotationSupport.Rotate270,
+                 (ULONG)local.ContentTransformation.RotationSupport.Offset0);
         st = ti->pfnAcquireNextPathInfo(topo, path, &next);
         ti->pfnReleasePathInfo(topo, path);
         path = NULL;
@@ -1130,6 +1139,8 @@ NTSTATUS DispIsSupportedVidPn(PDXGKRNL_INTERFACE Dxgk, DXGKARG_ISSUPPORTEDVIDPN 
     NTSTATUS st;
     BOOLEAN ok = FALSE;
 
+    ULONG dbgRot = 0, dbgScal = 0, dbgSw = 0, dbgSh = 0, dbgTw = 0, dbgTh = 0;
+
     A->IsVidPnSupported = FALSE;
     st = Dxgk->DxgkCbQueryVidPnInterface(A->hDesiredVidPn, DXGK_VIDPN_INTERFACE_VERSION_V1, &vi);
     if (!NT_SUCCESS(st)) {
@@ -1156,6 +1167,8 @@ NTSTATUS DispIsSupportedVidPn(PDXGKRNL_INTERFACE Dxgk, DXGKARG_ISSUPPORTEDVIDPN 
     if (!NT_SUCCESS(st)) {
         return st;
     }
+    dbgRot = (ULONG)path->ContentTransformation.Rotation;
+    dbgScal = (ULONG)path->ContentTransformation.Scaling;
     if (path->VidPnSourceId == 0 && path->VidPnTargetId == 0 &&
         (path->ContentTransformation.Scaling == D3DKMDT_VPPS_IDENTITY ||
          path->ContentTransformation.Scaling == D3DKMDT_VPPS_UNPINNED ||
@@ -1169,6 +1182,8 @@ NTSTATUS DispIsSupportedVidPn(PDXGKRNL_INTERFACE Dxgk, DXGKARG_ISSUPPORTEDVIDPN 
                 if (NT_SUCCESS(st) && spin != NULL) {
                     ULONG w = spin->Format.Graphics.PrimSurfSize.cx;
                     ULONG h = spin->Format.Graphics.PrimSurfSize.cy;
+                    dbgSw = w;
+                    dbgSh = h;
                     if (spin->Type != D3DKMDT_RMT_GRAPHICS ||
                         (spin->Format.Graphics.PixelFormat != D3DDDIFMT_X8R8G8B8 &&
                          spin->Format.Graphics.PixelFormat != D3DDDIFMT_A8R8G8B8)) {
@@ -1186,8 +1201,9 @@ NTSTATUS DispIsSupportedVidPn(PDXGKRNL_INTERFACE Dxgk, DXGKARG_ISSUPPORTEDVIDPN 
                 if (NT_SUCCESS(st)) {
                     st = tgi->pfnAcquirePinnedModeInfo(tset, &tpin);
                     if (NT_SUCCESS(st) && tpin != NULL) {
-                        if (tpin->VideoSignalInfo.ActiveSize.cx != H_ACTIVE ||
-                            tpin->VideoSignalInfo.ActiveSize.cy != V_ACTIVE) {
+                        dbgTw = tpin->VideoSignalInfo.ActiveSize.cx;
+                        dbgTh = tpin->VideoSignalInfo.ActiveSize.cy;
+                        if (dbgTw != H_ACTIVE || dbgTh != V_ACTIVE) {
                             ok = FALSE;
                         }
                     }
@@ -1204,7 +1220,8 @@ NTSTATUS DispIsSupportedVidPn(PDXGKRNL_INTERFACE Dxgk, DXGKARG_ISSUPPORTEDVIDPN 
         return st;
     }
     A->IsVidPnSupported = ok;
-    LogPrint("IsSupportedVidPn %p -> %s\n", A->hDesiredVidPn, ok ? "yes" : "no");
+    LogPrint("IsSupportedVidPn %p -> %s (src=%ux%u tgt=%ux%u scal=%u rot=%u)\n", A->hDesiredVidPn, ok ? "yes" : "no",
+             dbgSw, dbgSh, dbgTw, dbgTh, dbgScal, dbgRot);
     return STATUS_SUCCESS;
 }
 

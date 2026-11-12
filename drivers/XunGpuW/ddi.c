@@ -1150,7 +1150,6 @@ static NTSTATUS APIENTRY TgRecommendMonitorModes(const HANDLE hAdapter, const DX
 
 static NTSTATUS APIENTRY TgEnumVidPnCofuncModality(const HANDLE hAdapter, const DXGKARG_ENUMVIDPNCOFUNCMODALITY *const A)
 {
-    LogPrint("EnumVidPnCofuncModality pivot %u\n", A->EnumPivotType);
     return DispEnumCofuncModality(&((TGPU_ADAPTER *)hAdapter)->Dxgk, A);
 }
 
