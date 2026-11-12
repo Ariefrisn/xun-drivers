@@ -10,7 +10,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     NTSTATUS status;
 
     LogOpen();
-    LogPrint("==== XunTouch v0.16 (QUP0 SE0 SPI FT8203, CRC16 0x8408, 180-deg flip) ====\n");
+    LogPrint("==== XunTouch v0.17 (QUP0 SE0 SPI FT8203, CRC16 0x8408, 180-deg flip) ====\n");
 
     WDF_DRIVER_CONFIG_INIT(&config, XunEvtDeviceAdd);
     config.EvtDriverUnload = XunEvtDriverUnload;

@@ -77,8 +77,26 @@
 #define SE_GENI_TX_WATERMARK_REG     0x80C
 #define SE_GENI_RX_WATERMARK_REG     0x810
 #define SE_GENI_RX_RFR_WATERMARK_REG 0x814
+#define GENI_CLK_CTRL_RO             0x60
+#define GENI_IF_DISABLE_RO           0x64
+#define FIFO_IF_DISABLE              (1u << 0)
+#define SE_DMA_TX_PTR_L              0xC30
+#define SE_DMA_TX_PTR_H              0xC34
+#define SE_DMA_TX_ATTR               0xC38
+#define SE_DMA_TX_LEN                0xC3C
+#define SE_DMA_TX_IRQ_STAT           0xC40
+#define SE_DMA_TX_IRQ_EN_SET         0xC4C
 #define SE_DMA_TX_IRQ_CLR            0xC44
+#define SE_DMA_RX_PTR_L              0xD30
+#define SE_DMA_RX_PTR_H              0xD34
+#define SE_DMA_RX_ATTR               0xD38
+#define SE_DMA_RX_LEN                0xD3C
+#define SE_DMA_RX_IRQ_STAT           0xD40
+#define SE_DMA_RX_IRQ_EN_SET         0xD4C
 #define SE_DMA_RX_IRQ_CLR            0xD44
+#define SE_DMA_GENERAL_CFG           0xE30
+#define SE_DMA_GENERAL_CFG_EN        0x0Fu
+#define SPI_OP_TX_RX_ALT             7u
 #define SE_GSI_EVENT_EN              0xE18
 #define SE_IRQ_EN                    0xE1C
 #define SE_HW_PARAM_0                0xE24
@@ -102,7 +120,10 @@
 
 #define SPI_OP_TX_ONLY               1u
 #define SPI_OP_RX_ONLY               2u
-#define SPI_OP_TX_RX                 3u
+#define SPI_OP_TX_RX                 7u
+#define SPI_OP_CS_ASSERT             8u
+#define SPI_OP_CS_DEASSERT           9u
+#define SPI_OP_SCK_ONLY              10u
 #define M_OPCODE_SHIFT               27
 
 /* 19.2 MHz XO / 3 = 6.4 MHz SPI SCLK (within FT8203 rated SPI frequency) */

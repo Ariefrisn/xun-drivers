@@ -342,7 +342,7 @@ NTSTATUS TouchHwInit(PDEVICE_CONTEXT Ctx) {
   TlmmSetOutput(&Ctx->PinReset, FALSE);
   SleepMs(20);
   TlmmSetOutput(&Ctx->PinReset, TRUE);
-  SleepMs(15);
+  SleepMs(200);
 
   status = GccEnableQup0Se0();
   if (!NT_SUCCESS(status)) {
