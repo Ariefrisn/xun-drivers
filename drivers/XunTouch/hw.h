@@ -51,8 +51,8 @@
 #define SE_GENI_CLK_SEL              0x7C
 #define SE_SPI_CPHA                  0x224
 #define SE_SPI_CPOL                  0x230
-#define SE_SPI_DEMUX_OUTPUT_INV      0x248
-#define SE_SPI_DEMUX_SEL             0x24C
+#define SE_SPI_DEMUX_OUTPUT_INV      0x24C
+#define SE_SPI_DEMUX_SEL             0x250
 #define SE_GENI_BYTE_GRAN            0x254
 #define SE_GENI_DMA_MODE_EN          0x258
 #define SE_SPI_TRANS_CFG             0x25C
@@ -102,7 +102,7 @@
 
 #define SPI_OP_TX_ONLY               1u
 #define SPI_OP_RX_ONLY               2u
-#define SPI_OP_TX_RX                 7u
+#define SPI_OP_TX_RX                 3u
 #define M_OPCODE_SHIFT               27
 
 /* 19.2 MHz XO / 3 = 6.4 MHz SPI SCLK (within FT8203 rated SPI frequency) */

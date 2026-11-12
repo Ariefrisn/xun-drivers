@@ -496,18 +496,13 @@ NTSTATUS DispSetVisibility(const DXGKARG_SETVIDPNSOURCEVISIBILITY *A)
 {
     BOOLEAN visible = A->Visible ? TRUE : FALSE;
 
-    static BOOLEAN fbCleared;
-
     LogPrint("SetVidPnSourceVisibility: src %u visible %u\n", A->VidPnSourceId, A->Visible);
-    /* v0.45.8: the boot framebuffer still held the last boot picture (spinner) and showed up for a moment
-       whenever the scanout fell back to it around a screen-off. Clear it once (PASSIVE here). */
-    if (!fbCleared && g_Fb != NULL && g_DirectActive) {
-        RtlZeroMemory(g_Fb, (SIZE_T)g_Post.Pitch * g_Post.Height);
-        fbCleared = TRUE;
-        LogPrint("boot framebuffer cleared\n");
-    }
     if (visible != g_Visible) {
-        BlPanel(visible);                                /* v0.45.6: screen off = backlight off */
+        if (!visible && DispFileExists(L"\\??\\C:\\xun\\bl.always")) {
+            LogPrint("%s\n", "SetVidPnSourceVisibility: bl.always present -> backlight kept ON");
+        } else {
+            BlPanel(visible);                                /* v0.45.6: screen off = backlight off */
+        }
     }
     g_Visible = visible;
     if (g_Visible) {
@@ -1296,8 +1291,8 @@ static VOID BlPanel(BOOLEAN On)
     if ((g_Ktz.Se1 == NULL && g_Dsi == NULL) || KeGetCurrentIrql() != PASSIVE_LEVEL) {
         return;
     }
-    if (!On && g_Done < 10 && !DispFileExists(L"\\??\\C:\\xun\\bl.off")) {
-        LogPrint("panel off deferred during boot (done=%u)\n", g_Done);
+    if (!On && (DispFileExists(L"\\??\\C:\\xun\\bl.always") || (g_Done < 10 && !DispFileExists(L"\\??\\C:\\xun\\bl.off")))) {
+        LogPrint("panel off deferred / ignored (done=%u, bl.always=%u)\n", g_Done, DispFileExists(L"\\??\\C:\\xun\\bl.always"));
         return;
     }
     done = BlApply(g_Brightness, On);

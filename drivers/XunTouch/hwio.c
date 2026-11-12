@@ -232,13 +232,22 @@ static VOID GeniCancel(PGENI_SPI Bus)
         if (MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS) & M_CMD_CANCEL_EN) {
             break;
         }
-        KeStallExecutionProcessor(1);
+        KeStallExecutionProcessor(10);
     }
     if ((MmioRead32(&Bus->Se, SE_GENI_STATUS) & M_GENI_CMD_ACTIVE) != 0) {
         MmioWrite32(&Bus->Se, SE_GENI_M_CMD_CTRL_REG, M_GENI_CMD_ABORT);
-        KeStallExecutionProcessor(100);
+        for (i = 0; i < 1000; i++) {
+            if (MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS) & M_CMD_ABORT_EN) {
+                break;
+            }
+            KeStallExecutionProcessor(10);
+        }
     }
-    MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFF);
+    {
+        ULONG pending = MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS);
+        MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, pending | 0xFFFFFFFF);
+        MmioWrite32(&Bus->Se, SE_GENI_S_IRQ_CLEAR, 0xFFFFFFFF);
+    }
 }
 
 NTSTATUS GeniSpiXfer(PGENI_SPI Bus, const UCHAR *Tx, UCHAR *Rx, ULONG Len)

@@ -2,6 +2,7 @@
 
 DRIVER_INITIALIZE DriverEntry;
 static EVT_WDF_DRIVER_UNLOAD XunEvtDriverUnload;
+static volatile LONG g_DeviceCount = 0;
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
@@ -37,6 +38,11 @@ NTSTATUS XunEvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
     NTSTATUS status;
 
     UNREFERENCED_PARAMETER(Driver);
+
+    if (InterlockedIncrement(&g_DeviceCount) > 1) {
+        LogPrint("XunTouch: duplicate device node detected (%d), rejecting duplicate instance\n", g_DeviceCount);
+        return STATUS_DEVICE_ALREADY_ATTACHED;
+    }
 
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
     pnp.EvtDevicePrepareHardware = XunEvtPrepareHardware;
@@ -84,6 +90,7 @@ NTSTATUS XunEvtReleaseHardware(WDFDEVICE Device, WDFCMRESLIST Translated)
     UNREFERENCED_PARAMETER(Translated);
     TouchVhfDelete(ctx);
     TouchHwDeinit(ctx);
+    InterlockedDecrement(&g_DeviceCount);
     return STATUS_SUCCESS;
 }
 
