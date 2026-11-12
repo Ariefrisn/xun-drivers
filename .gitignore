@@ -7,3 +7,26 @@
 out/
 dist/
 .DS_Store
+
+# EFI and ACPI build artifacts
+efi/Build/
+Build/
+*.fd
+*.rom
+*.img
+*.dtb
+*.dtbo
+*.mbn
+*.elf
+*.bin
+*.aml
+
+# Certificates and keys
+*.cer
+*.pfx
+*.pvk
+*.pem
+
+# Python cache
+__pycache__/
+*.pyc

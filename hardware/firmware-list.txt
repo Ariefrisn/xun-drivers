@@ -1,0 +1,203 @@
+=== REDMI PAD SE (xun) FIRMWARE & PERIPHERAL BLOB REFERENCE ===
+
+--- 1. STOCK VENDOR FIRMWARE (/vendor/firmware/ & modem/dsp) ---
+﻿total 11196
+drwxr-xr-x  3 root shell    4096 2008-12-31 18:00 .
+drwxr-xr-x 16 root shell    4096 2008-12-31 18:00 ..
+-rw-r--r--  1 root root     5731 2008-12-31 18:00 Conf_MultipleTest_ft8203.ini
+-rw-r--r--  1 root root     5731 2008-12-31 18:00 Conf_MultipleTest_ft8203_ab.ini
+-rw-r--r--  1 root root      148 2008-12-31 18:00 a610_zap.b00
+-rw-r--r--  1 root root     6712 2008-12-31 18:00 a610_zap.b01
+-rw-r--r--  1 root root     2096 2008-12-31 18:00 a610_zap.b02
+-rw-r--r--  1 root root    14384 2008-12-31 18:00 a610_zap.elf
+-rw-r--r--  1 root root     6860 2008-12-31 18:00 a610_zap.mdt
+-rw-r--r--  1 root root    32504 2008-12-31 18:00 a630_sqe.fw
+-rw-r--r--  1 root root    43068 2008-12-31 18:00 a660_sqe.fw
+-rw-r--r--  1 root root    55888 2008-12-31 18:00 a662_gmu.bin
+-rw-r--r--  1 root root      148 2008-12-31 18:00 a662_zap.b00
+-rw-r--r--  1 root root     1976 2008-12-31 18:00 a662_zap.b01
+-rw-r--r--  1 root root     3896 2008-12-31 18:00 a662_zap.b02
+-rw-r--r--  1 root root     6072 2008-12-31 18:00 a662_zap.elf
+-rw-r--r--  1 root root    12088 2008-12-31 18:00 a662_zap.mbn
+-rw-r--r--  1 root root     4044 2008-12-31 18:00 a662_zap.mdt
+-rw-r--r--  1 root root    35572 2008-12-31 18:00 a710_sqe.fw
+-rw-r--r--  1 root root      148 2008-12-31 18:00 a710_zap.b00
+-rw-r--r--  1 root root     1948 2008-12-31 18:00 a710_zap.b01
+-rw-r--r--  1 root root     3896 2008-12-31 18:00 a710_zap.b02
+-rw-r--r--  1 root root     6044 2008-12-31 18:00 a710_zap.elf
+-rw-r--r--  1 root root    12088 2008-12-31 18:00 a710_zap.mbn
+-rw-r--r--  1 root root     4044 2008-12-31 18:00 a710_zap.mdt
+-rw-r--r--  1 root root    74676 2008-12-31 18:00 a730_sqe.fw
+-rw-r--r--  1 root root      148 2008-12-31 18:00 a730_zap.b00
+-rw-r--r--  1 root root     2236 2008-12-31 18:00 a730_zap.b01
+-rw-r--r--  1 root root     3896 2008-12-31 18:00 a730_zap.b02
+-rw-r--r--  1 root root     6332 2008-12-31 18:00 a730_zap.elf
+-rw-r--r--  1 root root    12088 2008-12-31 18:00 a730_zap.mbn
+-rw-r--r--  1 root root     4044 2008-12-31 18:00 a730_zap.mdt
+-rw-r--r--  1 root root    97280 2008-12-31 18:00 focaltech_ts_fw_boe_ft8203.bin
+-rw-r--r--  1 root root    98216 2008-12-31 18:00 focaltech_ts_fw_huaxing_ft8203.bin
+-rw-r--r--  1 root root     2380 2008-12-31 18:00 fs1815.fsm
+-rw-r--r--  1 root root    57272 2008-12-31 18:00 gmu_gen70000.bin
+-rw-r--r--  1 root root   245760 2008-12-31 18:00 novatek_ts_fw_tianma.bin
+-rw-r--r--  1 root root   245760 2008-12-31 18:00 novatek_ts_mp_tianma.bin
+-rw-r--r--  1 root root     8076 2008-12-31 18:00 sipa.bin
+-rw-r--r--  1 root root  1852500 2008-12-31 18:00 venus.mbn
+-rw-r--r--  1 root root  1852708 2008-12-31 18:00 venus_4mb.mbn
+-rw-r--r--  1 root root  1852708 2008-12-31 18:00 venus_4mb_unsigned.mbn
+-rw-r--r--  1 root root  1852708 2008-12-31 18:00 venus_4mb_v6.mbn
+-rw-r--r--  1 root root  1860200 2008-12-31 18:00 venus_4mb_v7.mbn
+-rw-r--r--  1 root root  1853012 2008-12-31 18:00 venus_unsigned.mbn
+-rw-r--r--  1 root root  1853012 2008-12-31 18:00 venus_v6.mbn
+-rw-r--r--  1 root root  1860200 2008-12-31 18:00 venus_v7.mbn
+-rw-r--r--  1 root root  2024040 2008-12-31 18:00 vpu20_1v.mbn
+-rw-r--r--  1 root root  2016868 2008-12-31 18:00 vpu20_1v_unsigned.mbn
+-rw-r--r--  1 root root  2024040 2008-12-31 18:00 vpu20_4v.mbn
+-rw-r--r--  1 root root  2017300 2008-12-31 18:00 vpu20_4v_unsigned.mbn
+drwxr-xr-x  3 root shell    4096 2008-12-31 18:00 wlan
+
+--- 2. ADSP / CDSP / MODEM FIRMWARE (from stock modem_a.img FAT filesystem) ---
+      1236 bytes  adsp.b00
+      8344 bytes  adsp.b01
+     85748 bytes  adsp.b02
+    387520 bytes  adsp.b03
+   1635112 bytes  adsp.b04
+   1701416 bytes  adsp.b05
+      2912 bytes  adsp.b06
+     25428 bytes  adsp.b07
+     28524 bytes  adsp.b08
+      4828 bytes  adsp.b09
+       260 bytes  adsp.b10
+     62112 bytes  adsp.b12
+     72420 bytes  adsp.b13
+    671744 bytes  adsp.b14
+   1351684 bytes  adsp.b15
+    278532 bytes  adsp.b16
+     11770 bytes  adsp.b17
+      7008 bytes  adsp.b18
+       732 bytes  adsp.b19
+      9680 bytes  adsp.b20
+     28652 bytes  adsp.b21
+    203900 bytes  adsp.b22
+    266240 bytes  adsp.b23
+   5644862 bytes  adsp.b24
+   1837658 bytes  adsp.b25
+     20532 bytes  adsp.b26
+    342640 bytes  adsp.b27
+      3072 bytes  adsp.b28
+    878904 bytes  adsp.b29
+    328240 bytes  adsp.b30
+      3584 bytes  adsp.b31
+      5104 bytes  adsp.b32
+    145408 bytes  adsp.b33
+   1893696 bytes  adsp.b34
+       180 bytes  adsp.b35
+      9580 bytes  adsp.mdt
+
+--- 3. DEVICE STAGING DIRECTORY (C:\xun\ on tablet / K:\xun) ---
+         0 bytes  C:\xun\bl.always
+         3 bytes  C:\xun\cpu.max
+         0 bytes  C:\xun\disp.noflip
+      4713 bytes  C:\xun\install.cmd
+         0 bytes  C:\xun\pwr.off
+         3 bytes  C:\xun\umd.enable
+     99888 bytes  C:\xun\drivers\XunAudio\devcon.exe
+       696 bytes  C:\xun\drivers\XunAudio\install-manual.cmd
+       786 bytes  C:\xun\drivers\XunAudio\xun-woa-test.cer
+      2396 bytes  C:\xun\drivers\XunAudio\xunaudio.cat
+      1637 bytes  C:\xun\drivers\XunAudio\XunAudio.inf
+     53128 bytes  C:\xun\drivers\XunAudio\XunAudio.sys
+     99888 bytes  C:\xun\drivers\XunBacklight\devcon.exe
+       696 bytes  C:\xun\drivers\XunBacklight\install-manual.cmd
+       786 bytes  C:\xun\drivers\XunBacklight\xun-woa-test.cer
+      2500 bytes  C:\xun\drivers\XunBacklight\xunbacklight.cat
+      1564 bytes  C:\xun\drivers\XunBacklight\XunBacklight.inf
+     22920 bytes  C:\xun\drivers\XunBacklight\XunBacklight.sys
+       514 bytes  C:\xun\drivers\XunBattery\copy-log-battery.cmd
+     99888 bytes  C:\xun\drivers\XunBattery\devcon.exe
+      1741 bytes  C:\xun\drivers\XunBattery\install-battery-local.cmd
+      1231 bytes  C:\xun\drivers\XunBattery\install-battery.cmd
+       696 bytes  C:\xun\drivers\XunBattery\install-manual.cmd
+       786 bytes  C:\xun\drivers\XunBattery\xun-woa-test.cer
+      2482 bytes  C:\xun\drivers\XunBattery\xunbattery.cat
+      1605 bytes  C:\xun\drivers\XunBattery\XunBattery.inf
+     45448 bytes  C:\xun\drivers\XunBattery\XunBattery.sys
+     99888 bytes  C:\xun\drivers\XunButtons\devcon.exe
+       696 bytes  C:\xun\drivers\XunButtons\install-manual.cmd
+       786 bytes  C:\xun\drivers\XunButtons\xun-woa-test.cer
+      2416 bytes  C:\xun\drivers\XunButtons\xunbuttons.cat
+      1626 bytes  C:\xun\drivers\XunButtons\XunButtons.inf
+     31624 bytes  C:\xun\drivers\XunButtons\XunButtons.sys
+     99888 bytes  C:\xun\drivers\XunCpu\devcon.exe
+       696 bytes  C:\xun\drivers\XunCpu\install-manual.cmd
+       786 bytes  C:\xun\drivers\XunCpu\xun-woa-test.cer
+      2375 bytes  C:\xun\drivers\XunCpu\xuncpu.cat
+      1409 bytes  C:\xun\drivers\XunCpu\XunCpu.inf
+     18824 bytes  C:\xun\drivers\XunCpu\XunCpu.sys
+     99888 bytes  C:\xun\drivers\XunDisplay\devcon.exe
+      1752 bytes  C:\xun\drivers\XunDisplay\install-display.cmd
+       696 bytes  C:\xun\drivers\XunDisplay\install-manual.cmd
+       573 bytes  C:\xun\drivers\XunDisplay\uninstall-display.cmd
+      1604 bytes  C:\xun\drivers\XunDisplay\xun-brightness.ps1
+       786 bytes  C:\xun\drivers\XunDisplay\xun-woa-test.cer
+      2416 bytes  C:\xun\drivers\XunDisplay\xundisplay.cat
+      1763 bytes  C:\xun\drivers\XunDisplay\XunDisplay.inf
+     42376 bytes  C:\xun\drivers\XunDisplay\XunDisplay.sys
+     99888 bytes  C:\xun\drivers\XunGpu\devcon.exe
+       696 bytes  C:\xun\drivers\XunGpu\install-manual.cmd
+       786 bytes  C:\xun\drivers\XunGpu\xun-woa-test.cer
+      2375 bytes  C:\xun\drivers\XunGpu\xungpu.cat
+      1405 bytes  C:\xun\drivers\XunGpu\XunGpu.inf
+     34184 bytes  C:\xun\drivers\XunGpu\XunGpu.sys
+     99888 bytes  C:\xun\drivers\XunGpuW\devcon.exe
+      1149 bytes  C:\xun\drivers\XunGpuW\install-gpuw.cmd
+       696 bytes  C:\xun\drivers\XunGpuW\install-manual.cmd
+       786 bytes  C:\xun\drivers\XunGpuW\xun-woa-test.cer
+      2452 bytes  C:\xun\drivers\XunGpuW\xungpuw.cat
+      2239 bytes  C:\xun\drivers\XunGpuW\XunGpuW.inf
+     77704 bytes  C:\xun\drivers\XunGpuW\XunGpuW.sys
+       164 bytes  C:\xun\drivers\XunModem\copy-log-modem.cmd
+     99888 bytes  C:\xun\drivers\XunModem\devcon.exe
+       696 bytes  C:\xun\drivers\XunModem\install-manual.cmd
+      1260 bytes  C:\xun\drivers\XunModem\install-modem.cmd
+       786 bytes  C:\xun\drivers\XunModem\xun-woa-test.cer
+      2396 bytes  C:\xun\drivers\XunModem\xunmodem.cat
+      1482 bytes  C:\xun\drivers\XunModem\XunModem.inf
+    101768 bytes  C:\xun\drivers\XunModem\XunModem.sys
+     99888 bytes  C:\xun\drivers\XunRpm\devcon.exe
+       696 bytes  C:\xun\drivers\XunRpm\install-manual.cmd
+       786 bytes  C:\xun\drivers\XunRpm\xun-woa-test.cer
+      2375 bytes  C:\xun\drivers\XunRpm\xunrpm.cat
+      1401 bytes  C:\xun\drivers\XunRpm\XunRpm.inf
+     28040 bytes  C:\xun\drivers\XunRpm\XunRpm.sys
+     99888 bytes  C:\xun\drivers\XunSpeaker\devcon.exe
+       696 bytes  C:\xun\drivers\XunSpeaker\install-manual.cmd
+       786 bytes  C:\xun\drivers\XunSpeaker\xun-woa-test.cer
+      2416 bytes  C:\xun\drivers\XunSpeaker\xunspeaker.cat
+      2614 bytes  C:\xun\drivers\XunSpeaker\XunSpeaker.inf
+     42376 bytes  C:\xun\drivers\XunSpeaker\XunSpeaker.sys
+     99888 bytes  C:\xun\drivers\XunTouch\devcon.exe
+       696 bytes  C:\xun\drivers\XunTouch\install-manual.cmd
+       958 bytes  C:\xun\drivers\XunTouch\install-touch.cmd
+       786 bytes  C:\xun\drivers\XunTouch\xun-woa-test.cer
+      2528 bytes  C:\xun\drivers\XunTouch\xuntouch.cat
+      1657 bytes  C:\xun\drivers\XunTouch\XunTouch.inf
+     40840 bytes  C:\xun\drivers\XunTouch\XunTouch.sys
+       160 bytes  C:\xun\drivers\XunWifi\copy-log-wifi.cmd
+     99888 bytes  C:\xun\drivers\XunWifi\devcon.exe
+       696 bytes  C:\xun\drivers\XunWifi\install-manual.cmd
+      1444 bytes  C:\xun\drivers\XunWifi\install-wifi.cmd
+       786 bytes  C:\xun\drivers\XunWifi\xun-woa-test.cer
+      2386 bytes  C:\xun\drivers\XunWifi\xunwifi.cat
+      2448 bytes  C:\xun\drivers\XunWifi\XunWifi.inf
+    169352 bytes  C:\xun\drivers\XunWifi\XunWifi.sys
+     97280 bytes  C:\xun\fw\focaltech_ts_fw_boe_ft8203.bin
+     98216 bytes  C:\xun\fw\focaltech_ts_fw_huaxing_ft8203.bin
+      2380 bytes  C:\xun\fw\fs1815.fsm
+      8076 bytes  C:\xun\fw\sipa.bin
+       148 bytes  C:\xun\fw\gpu\a610_zap.b00
+      6712 bytes  C:\xun\fw\gpu\a610_zap.b01
+      2096 bytes  C:\xun\fw\gpu\a610_zap.b02
+     14384 bytes  C:\xun\fw\gpu\a610_zap.elf
+      6860 bytes  C:\xun\fw\gpu\a610_zap.mdt
+     32504 bytes  C:\xun\fw\gpu\a630_sqe.fw
+   8441344 bytes  C:\xun\umd\xungpu_d3d10.dll
