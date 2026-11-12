@@ -53,7 +53,11 @@ typedef struct _GENI_SPI {
     PUCHAR     TxScratch;
     PUCHAR     RxScratch;
     ULONG      ScratchSize;
-    BOOLEAN    UseDma;
+    BOOLEAN          UseDma;
+    PUCHAR           DmaTxBuf;
+    PUCHAR           DmaRxBuf;
+    PHYSICAL_ADDRESS DmaTxPa;
+    PHYSICAL_ADDRESS DmaRxPa;
 } GENI_SPI, *PGENI_SPI;
 
 NTSTATUS GccEnableQup0Se0(VOID);
