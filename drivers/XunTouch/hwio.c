@@ -58,124 +58,37 @@ BOOLEAN TlmmGetInput(PTLMM_PIN P)
 
 /* ---- GCC QUP0 SE0 -------------------------------------------------------- */
 
-static NTSTATUS GccRcgSetXo(PMMIO_RANGE Page, ULONG Off)
-{
-    ULONG i;
-
-    MmioWrite32(Page, Off + GCC_RCG_CFG_OFF, 0x1);
-    MmioWrite32(Page, Off, MmioRead32(Page, Off) | GCC_RCG_CMD_UPDATE);
-    for (i = 0; i < 1000; i++) {
-        if ((MmioRead32(Page, Off) & GCC_RCG_CMD_UPDATE) == 0) {
-            return STATUS_SUCCESS;
-        }
-        KeStallExecutionProcessor(1);
-    }
-    return STATUS_IO_TIMEOUT;
-}
-
 NTSTATUS GccEnableQup0Se0(VOID)
 {
-    MMIO_RANGE vote = {0}, qup = {0};
-    NTSTATUS status;
-    ULONG cbcr = 0, i;
-
-    status = MmioMap(&vote, GCC_BASE + (GCC_APCS_VOTE_REG & ~0xFFFu), 0x1000);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-    status = MmioMap(&qup, GCC_BASE + (GCC_QUP0_S0_CBCR & ~0xFFFu), 0x1000);
-    if (!NT_SUCCESS(status)) {
-        MmioUnmap(&vote);
-        return status;
-    }
-
-    MmioWrite32(&vote, GCC_APCS_VOTE_REG & 0xFFF,
-                MmioRead32(&vote, GCC_APCS_VOTE_REG & 0xFFF) |
-                (1u << GCC_QUP0_M_AHB_BIT) | (1u << GCC_QUP0_S_AHB_BIT) |
-                (1u << GCC_QUP0_CORE_BIT) | (1u << GCC_QUP0_CORE2X_BIT) |
-                (1u << GCC_QUP0_S0_BIT));
-
-    status = GccRcgSetXo(&qup, GCC_QUP0_S0_RCG_CMD & 0xFFF);
-    LogPrint("GCC: vote=%08x rcg_update=%08x\n",
-             MmioRead32(&vote, GCC_APCS_VOTE_REG & 0xFFF), status);
-
-    for (i = 0; i < 1000; i++) {
-        cbcr = MmioRead32(&qup, GCC_QUP0_S0_CBCR & 0xFFF);
-        if ((cbcr & GCC_CBCR_CLK_OFF) == 0) {
-            break;
-        }
-        KeStallExecutionProcessor(1);
-    }
-    LogPrint("GCC: qup0 s0 cbcr=%08x (%s)\n", cbcr, (cbcr & GCC_CBCR_CLK_OFF) ? "OFF" : "on");
-
-    MmioUnmap(&qup);
-    MmioUnmap(&vote);
-    return (cbcr & GCC_CBCR_CLK_OFF) ? STATUS_DEVICE_NOT_READY : STATUS_SUCCESS;
+    return STATUS_SUCCESS;
 }
 
-/* ---- GENI SPI ------------------------------------------------------------ */
+/* ---- TLMM GPIO 0..3 Bit-Bang SPI Mode 0 ---------------------------------- */
 
-static VOID GeniConfigPacking(PGENI_SPI Bus)
+#define Tlmm Se
+
+static __forceinline VOID TlmmSetPin(PGENI_SPI Bus, ULONG Pin, BOOLEAN High)
 {
-    ULONG cfg[4] = {0};
-    const int bpw = 8, packWords = 4;
-    int idxStart = bpw - 1, idx = idxStart, i;
-    int iter = (8 * packWords) / 8;
-    ULONG cfg0, cfg1;
-
-    for (i = 0; i < iter; i++) {
-        cfg[i] = ((ULONG)idx << 5) | (1u << 4) | ((ULONG)(bpw - 1) << 1);
-        idx = ((i + 1) * 8) + idxStart;
-    }
-    cfg[iter - 1] |= 1u;
-    cfg0 = cfg[0] | (cfg[1] << 10);
-    cfg1 = cfg[2] | (cfg[3] << 10);
-
-    MmioWrite32(&Bus->Se, SE_GENI_TX_PACKING_CFG0, cfg0);
-    MmioWrite32(&Bus->Se, SE_GENI_TX_PACKING_CFG1, cfg1);
-    MmioWrite32(&Bus->Se, SE_GENI_RX_PACKING_CFG0, cfg0);
-    MmioWrite32(&Bus->Se, SE_GENI_RX_PACKING_CFG1, cfg1);
-    MmioWrite32(&Bus->Se, SE_GENI_BYTE_GRAN, bpw / 16);
+    MmioWrite32(&Bus->Tlmm, Pin * TLMM_PIN_STRIDE + TLMM_IO, High ? 0x2u : 0x0u);
 }
 
-static VOID GeniCancel(PGENI_SPI Bus);
-
-static VOID GeniIrqClear(PGENI_SPI Bus)
+static __forceinline BOOLEAN TlmmGetPin(PGENI_SPI Bus, ULONG Pin)
 {
-    MmioWrite32(&Bus->Se, SE_GSI_EVENT_EN, 0);
-    if (MmioRead32(&Bus->Se, SE_GENI_STATUS) & 1u) {
-        GeniCancel(Bus);
-    }
-    MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFF);
-    MmioWrite32(&Bus->Se, SE_GENI_S_IRQ_CLEAR, 0xFFFFFFFF);
-    MmioWrite32(&Bus->Se, SE_DMA_TX_IRQ_CLR, 0xFFFFFFFF);
-    MmioWrite32(&Bus->Se, SE_DMA_RX_IRQ_CLR, 0xFFFFFFFF);
+    return (MmioRead32(&Bus->Tlmm, Pin * TLMM_PIN_STRIDE + TLMM_IO) & 1u) != 0;
 }
 
 NTSTATUS GeniSpiInit(PGENI_SPI Bus, ULONGLONG SeBase)
 {
     NTSTATUS status;
-    ULONG v;
-    MMIO_RANGE tlmm = {0};
-    ULONG pin;
 
-    /* 1. Direct TLMM pinmux: map TLMM WEST (0x00500000) for SPI pins GPIO 0..3 */
-    status = MmioMap(&tlmm, TLMM_BASE + TLMM_TILE_WEST, 0x4000);
-    if (NT_SUCCESS(status)) {
-        for (pin = 0; pin < 4; pin++) {
-            /* FUNC_SEL = 1 (qup0), PULL = 3 (pull-up), DRV = 2 (6mA), OE = 0 */
-            ULONG ctl = (TLMM_PULL_UP & 0x3) | ((TS_PIN_SPI_FUNC & 0xF) << 2) | ((TLMM_DRV_MA(6) & 0x7) << 6);
-            MmioWrite32(&tlmm, pin * TLMM_PIN_STRIDE + TLMM_CTL, ctl);
-        }
-        MmioUnmap(&tlmm);
-        LogPrint("GeniSpiInit: programmed TLMM GPIO 0..3 FUNC_SEL=qup0 (0x%03x)\n",
-                 (TLMM_PULL_UP & 0x3) | ((TS_PIN_SPI_FUNC & 0xF) << 2) | ((TLMM_DRV_MA(6) & 0x7) << 6));
-    }
+    UNREFERENCED_PARAMETER(SeBase);
 
-    status = MmioMap(&Bus->Se, SeBase, GENI_SE_SIZE);
+    /* Map TLMM WEST (0x00500000) for GPIO 0..3 bit-bang SPI */
+    status = MmioMap(&Bus->Tlmm, TLMM_BASE + TLMM_TILE_WEST, 0x4000);
     if (!NT_SUCCESS(status)) {
         return status;
     }
+
     Bus->ScratchSize = FTS_SPI_SCRATCH_SZ;
     Bus->TxScratch = (PUCHAR)ExAllocatePool2(POOL_FLAG_NON_PAGED, Bus->ScratchSize, XUN_POOL_TAG);
     Bus->RxScratch = (PUCHAR)ExAllocatePool2(POOL_FLAG_NON_PAGED, Bus->ScratchSize, XUN_POOL_TAG);
@@ -184,92 +97,33 @@ NTSTATUS GeniSpiInit(PGENI_SPI Bus, ULONGLONG SeBase)
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    Bus->Proto = (MmioRead32(&Bus->Se, GENI_FW_REVISION_RO) >> 8) & 0xFF;
-    Bus->TxDepth = (MmioRead32(&Bus->Se, SE_HW_PARAM_0) >> 16) & 0x3F;
-    {
-        ULONG ifDis = MmioRead32(&Bus->Se, GENI_IF_DISABLE_RO);
-        ULONG clkCtrl = MmioRead32(&Bus->Se, GENI_CLK_CTRL_RO);
-        Bus->UseDma = (ifDis & FIFO_IF_DISABLE) ? TRUE : FALSE;
-        LogPrint("GENI SPI %llx: fw_rev=%08x proto=%u tx_depth=%u status=%08x if_dis=%08x clk_ctrl=%08x use_dma=%u\n",
-                 SeBase, MmioRead32(&Bus->Se, GENI_FW_REVISION_RO), Bus->Proto, Bus->TxDepth,
-                 MmioRead32(&Bus->Se, SE_GENI_STATUS),
-                 ifDis, clkCtrl, (ULONG)Bus->UseDma);
-    }
-    if (Bus->Proto != GENI_PROTO_SPI) {
-        GeniSpiDeinit(Bus);
-        return STATUS_DEVICE_CONFIGURATION_ERROR;
-    }
-    if (Bus->TxDepth == 0) {
-        Bus->TxDepth = 16;
-    }
+    /* Configure GPIO 0..3 for TLMM bit-bang SPI Mode 0:
+     * - GPIO 0 (MISO): FUNC=0, OE=0 (input), PULL=UP (3), DRV=6mA
+     * - GPIO 1 (MOSI): FUNC=0, OE=1 (output), PULL=NONE (0), DRV=6mA, IO=0
+     * - GPIO 2 (CLK):  FUNC=0, OE=1 (output), PULL=NONE (0), DRV=6mA, IO=0 (CPOL=0)
+     * - GPIO 3 (CS):   FUNC=0, OE=1 (output), PULL=UP (3), DRV=6mA, IO=1 (CS idle HIGH)
+     */
+    MmioWrite32(&Bus->Tlmm, TS_PIN_SPI_MISO * TLMM_PIN_STRIDE + TLMM_CTL,
+                (TLMM_PULL_UP & 0x3) | ((0 & 0xF) << 2) | ((TLMM_DRV_MA(6) & 0x7) << 6));
 
-    if (Bus->UseDma) {
-        PHYSICAL_ADDRESS low = {0}, high = {0}, boundary = {0};
-        high.QuadPart = 0xFFFFFFFFULL;
-        Bus->DmaTxBuf = (PUCHAR)MmAllocateContiguousMemorySpecifyCache(FTS_SPI_SCRATCH_SZ, low, high, boundary, MmNonCached);
-        Bus->DmaRxBuf = (PUCHAR)MmAllocateContiguousMemorySpecifyCache(FTS_SPI_SCRATCH_SZ, low, high, boundary, MmNonCached);
-        if (!Bus->DmaTxBuf || !Bus->DmaRxBuf) {
-            GeniSpiDeinit(Bus);
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-        Bus->DmaTxPa = MmGetPhysicalAddress(Bus->DmaTxBuf);
-        Bus->DmaRxPa = MmGetPhysicalAddress(Bus->DmaRxBuf);
-    }
+    MmioWrite32(&Bus->Tlmm, TS_PIN_SPI_MOSI * TLMM_PIN_STRIDE + TLMM_IO, 0x0u);
+    MmioWrite32(&Bus->Tlmm, TS_PIN_SPI_MOSI * TLMM_PIN_STRIDE + TLMM_CTL,
+                (TLMM_PULL_NONE & 0x3) | ((0 & 0xF) << 2) | ((TLMM_DRV_MA(6) & 0x7) << 6) | (1u << 9));
 
-    GeniIrqClear(Bus);
-    MmioWrite32(&Bus->Se, GENI_CGC_CTRL, MmioRead32(&Bus->Se, GENI_CGC_CTRL) | 0x7F);
-    MmioWrite32(&Bus->Se, SE_DMA_GENERAL_CFG,
-        MmioRead32(&Bus->Se, SE_DMA_GENERAL_CFG) | SE_DMA_GENERAL_CFG_EN);
-    MmioWrite32(&Bus->Se, GENI_OUTPUT_CTRL, 0x7F);
-    MmioWrite32(&Bus->Se, GENI_FORCE_DEFAULT_REG, 1);
-    MmioWrite32(&Bus->Se, SE_IRQ_EN, MmioRead32(&Bus->Se, SE_IRQ_EN) | (1u << 2) | (1u << 3));
+    MmioWrite32(&Bus->Tlmm, TS_PIN_SPI_CLK * TLMM_PIN_STRIDE + TLMM_IO, 0x0u);
+    MmioWrite32(&Bus->Tlmm, TS_PIN_SPI_CLK * TLMM_PIN_STRIDE + TLMM_CTL,
+                (TLMM_PULL_NONE & 0x3) | ((0 & 0xF) << 2) | ((TLMM_DRV_MA(6) & 0x7) << 6) | (1u << 9));
 
-    /* Atur mode DMA vs FIFO */
-    if (Bus->UseDma) {
-        MmioWrite32(&Bus->Se, SE_GENI_DMA_MODE_EN, 1u);
-        MmioWrite32(&Bus->Se, SE_DMA_TX_IRQ_EN_SET, 0x7u);
-        MmioWrite32(&Bus->Se, SE_DMA_RX_IRQ_EN_SET, 0x7u);
-    } else {
-        MmioWrite32(&Bus->Se, SE_GENI_DMA_MODE_EN, 0u);
-        MmioWrite32(&Bus->Se, SE_GENI_TX_WATERMARK_REG, 0u);
-        MmioWrite32(&Bus->Se, SE_GENI_RX_WATERMARK_REG, Bus->TxDepth - 3);
-        MmioWrite32(&Bus->Se, SE_GENI_RX_RFR_WATERMARK_REG, Bus->TxDepth - 2);
-    }
-    MmioWrite32(&Bus->Se, SE_GSI_EVENT_EN, 0);
-    v = MmioRead32(&Bus->Se, SE_GENI_M_IRQ_EN);
-    v |= M_CMD_DONE_EN | M_SPI_ERR_MASK | M_RX_FIFO_WATERMARK_EN | M_RX_FIFO_LAST_EN | M_TX_FIFO_WATERMARK_EN;
-    MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_EN, v);
-    GeniConfigPacking(Bus);
+    MmioWrite32(&Bus->Tlmm, TS_PIN_SPI_CS * TLMM_PIN_STRIDE + TLMM_IO, 0x2u);
+    MmioWrite32(&Bus->Tlmm, TS_PIN_SPI_CS * TLMM_PIN_STRIDE + TLMM_CTL,
+                (TLMM_PULL_UP & 0x3) | ((0 & 0xF) << 2) | ((TLMM_DRV_MA(6) & 0x7) << 6) | (1u << 9));
 
-    /* SPI Mode 0 (CPOL=0, CPHA=0), 8-bit words, CS0 active-low continuous across command */
-    MmioWrite32(&Bus->Se, SE_SPI_CPHA, 0);
-    MmioWrite32(&Bus->Se, SE_SPI_CPOL, 0);
-    MmioWrite32(&Bus->Se, SE_SPI_DEMUX_OUTPUT_INV, 0);
-    MmioWrite32(&Bus->Se, SE_SPI_DEMUX_SEL, 0);
-    MmioWrite32(&Bus->Se, SE_SPI_PRE_POST_CMD_DLY, 0);
-    MmioWrite32(&Bus->Se, SE_SPI_TRANS_CFG, 0);
-    MmioWrite32(&Bus->Se, SE_SPI_WORD_LEN, 8 - 4);
-    MmioWrite32(&Bus->Se, SE_GENI_CLK_SEL, 0);
-
-    /* Turn on GENI_SER_M_CLK_CFG */
-    MmioWrite32(&Bus->Se, GENI_SER_M_CLK_CFG, (SPI_6P4M_CLK_DIV << 4) | 1u);
-    LogPrint("GeniSpiInit: GENI_SER_M_CLK_CFG = %08x, DMA_MODE_EN = %08x\n",
-             MmioRead32(&Bus->Se, GENI_SER_M_CLK_CFG),
-             MmioRead32(&Bus->Se, SE_GENI_DMA_MODE_EN));
-    MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFFu);
+    LogPrint("GeniSpiInit: TLMM GPIO 0..3 bit-bang SPI Mode 0 ready\n");
     return STATUS_SUCCESS;
 }
 
 VOID GeniSpiDeinit(PGENI_SPI Bus)
 {
-    if (Bus->DmaTxBuf != NULL) {
-        MmFreeContiguousMemorySpecifyCache(Bus->DmaTxBuf, FTS_SPI_SCRATCH_SZ, MmNonCached);
-        Bus->DmaTxBuf = NULL;
-    }
-    if (Bus->DmaRxBuf != NULL) {
-        MmFreeContiguousMemorySpecifyCache(Bus->DmaRxBuf, FTS_SPI_SCRATCH_SZ, MmNonCached);
-        Bus->DmaRxBuf = NULL;
-    }
     if (Bus->TxScratch != NULL) {
         ExFreePoolWithTag(Bus->TxScratch, XUN_POOL_TAG);
         Bus->TxScratch = NULL;
@@ -279,177 +133,48 @@ VOID GeniSpiDeinit(PGENI_SPI Bus)
         Bus->RxScratch = NULL;
     }
     Bus->ScratchSize = 0;
-    MmioUnmap(&Bus->Se);
-}
-
-static VOID GeniCancel(PGENI_SPI Bus)
-{
-    ULONG i;
-
-    MmioWrite32(&Bus->Se, SE_GENI_M_CMD_CTRL_REG, M_GENI_CMD_CANCEL);
-    for (i = 0; i < 1000; i++) {
-        if (MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS) & M_CMD_CANCEL_EN) {
-            break;
-        }
-        KeStallExecutionProcessor(10);
-    }
-    if ((MmioRead32(&Bus->Se, SE_GENI_STATUS) & M_GENI_CMD_ACTIVE) != 0) {
-        MmioWrite32(&Bus->Se, SE_GENI_M_CMD_CTRL_REG, M_GENI_CMD_ABORT);
-        for (i = 0; i < 1000; i++) {
-            if (MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS) & M_CMD_ABORT_EN) {
-                break;
-            }
-            KeStallExecutionProcessor(10);
-        }
-    }
-    {
-        ULONG pending = MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS);
-        MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, pending | 0xFFFFFFFF);
-        MmioWrite32(&Bus->Se, SE_GENI_S_IRQ_CLEAR, 0xFFFFFFFF);
-    }
+    MmioUnmap(&Bus->Tlmm);
 }
 
 NTSTATUS GeniSpiXfer(PGENI_SPI Bus, const UCHAR *Tx, UCHAR *Rx, ULONG Len)
 {
-    ULONG txDone = 0, rxDone = 0, spins = 0, st = 0;
+    ULONG i;
+    int bit;
 
     if (Len == 0) {
         return STATUS_SUCCESS;
     }
 
-    if (Bus->UseDma) {
-        ULONG st = 0, txSt = 0, rxSt = 0, sp;
-        if (Len > FTS_SPI_SCRATCH_SZ) {
-            return STATUS_INVALID_PARAMETER;
-        }
-        RtlZeroMemory(Bus->DmaTxBuf, Len);
-        RtlZeroMemory(Bus->DmaRxBuf, Len);
-        if (Tx != NULL) {
-            RtlCopyMemory(Bus->DmaTxBuf, Tx, Len);
-        }
+    /* b) Set SCLK (GPIO 2) = 0, lalu CS (GPIO 3) = 0 (active low), KeStallExecutionProcessor(1) */
+    TlmmSetPin(Bus, TS_PIN_SPI_CLK, FALSE);
+    TlmmSetPin(Bus, TS_PIN_SPI_CS, FALSE);
+    KeStallExecutionProcessor(1);
 
-        MmioWrite32(&Bus->Se, SE_DMA_TX_IRQ_CLR, 0xFFFFFFFFu);
-        MmioWrite32(&Bus->Se, SE_DMA_RX_IRQ_CLR, 0xFFFFFFFFu);
-        MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFFu);
+    /* c) Untuk setiap byte i dari 0 sampai Len - 1: */
+    for (i = 0; i < Len; i++) {
+        UCHAR txByte = (Tx != NULL) ? Tx[i] : 0x00;
+        UCHAR rxByte = 0;
 
-        MmioWrite32(&Bus->Se, SE_SPI_TRANS_CFG, 0u);
-        MmioWrite32(&Bus->Se, SE_SPI_TX_TRANS_LEN, Len);
-        MmioWrite32(&Bus->Se, SE_SPI_RX_TRANS_LEN, Len);
-        MmioWrite32(&Bus->Se, SE_GENI_M_CMD0, (SPI_OP_TX_RX << M_OPCODE_SHIFT));
-
-        MmioWrite32(&Bus->Se, SE_DMA_RX_PTR_L, Bus->DmaRxPa.LowPart);
-        MmioWrite32(&Bus->Se, SE_DMA_RX_PTR_H, (ULONG)Bus->DmaRxPa.HighPart);
-        MmioWrite32(&Bus->Se, SE_DMA_RX_ATTR, 0u);
-        MmioWrite32(&Bus->Se, SE_DMA_RX_LEN, Len);
-
-        MmioWrite32(&Bus->Se, SE_DMA_TX_PTR_L, Bus->DmaTxPa.LowPart);
-        MmioWrite32(&Bus->Se, SE_DMA_TX_PTR_H, (ULONG)Bus->DmaTxPa.HighPart);
-        MmioWrite32(&Bus->Se, SE_DMA_TX_ATTR, 1u);
-        MmioWrite32(&Bus->Se, SE_DMA_TX_LEN, Len);
-
-        for (sp = 0; sp < 50000; sp++) {
-            st = MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS);
-            txSt = MmioRead32(&Bus->Se, SE_DMA_TX_IRQ_STAT);
-            rxSt = MmioRead32(&Bus->Se, SE_DMA_RX_IRQ_STAT);
-            if ((st & M_SPI_ERR_MASK) || ((st & M_CMD_DONE_EN) && (rxSt & 1u))) {
-                break;
+        for (bit = 7; bit >= 0; bit--) {
+            TlmmSetPin(Bus, TS_PIN_SPI_MOSI, ((txByte >> bit) & 1u) != 0);
+            KeStallExecutionProcessor(1);
+            TlmmSetPin(Bus, TS_PIN_SPI_CLK, TRUE);
+            KeStallExecutionProcessor(1);
+            if (TlmmGetPin(Bus, TS_PIN_SPI_MISO)) {
+                rxByte |= (UCHAR)(1u << bit);
             }
-            KeStallExecutionProcessor(2);
+            TlmmSetPin(Bus, TS_PIN_SPI_CLK, FALSE);
         }
-        Bus->LastIrqStatus = st;
-        MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, st ? st : 0xFFFFFFFFu);
-        MmioWrite32(&Bus->Se, SE_DMA_TX_IRQ_CLR, 0xFFFFFFFFu);
-        MmioWrite32(&Bus->Se, SE_DMA_RX_IRQ_CLR, 0xFFFFFFFFu);
 
-        if ((st & M_SPI_ERR_MASK) || !(st & M_CMD_DONE_EN)) {
-            LogPrint("GeniSpiDma err: st=%08x tx_dma=%08x rx_dma=%08x geni_st=%08x\n",
-                     st, txSt, rxSt, MmioRead32(&Bus->Se, SE_GENI_STATUS));
-            GeniCancel(Bus);
-            return (st & M_SPI_ERR_MASK) ? STATUS_DEVICE_PROTOCOL_ERROR : STATUS_IO_TIMEOUT;
-        }
         if (Rx != NULL) {
-            RtlCopyMemory(Rx, Bus->DmaRxBuf, Len);
-        }
-        return STATUS_SUCCESS;
-    }
-
-    /* FIFO path fallback */
-    if (MmioRead32(&Bus->Se, SE_GENI_STATUS) & 1u) {
-        GeniCancel(Bus);
-    }
-    MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFF);
-    MmioWrite32(&Bus->Se, SE_SPI_TRANS_CFG, 0);
-    MmioWrite32(&Bus->Se, SE_SPI_WORD_LEN, 8 - 4);
-    MmioWrite32(&Bus->Se, SE_SPI_TX_TRANS_LEN, Len);
-    MmioWrite32(&Bus->Se, SE_SPI_RX_TRANS_LEN, Len);
-    MmioWrite32(&Bus->Se, SE_GENI_M_CMD0, (SPI_OP_TX_RX << M_OPCODE_SHIFT));
-
-    while ((txDone < Len || rxDone < Len) && spins < 50000) {
-        BOOLEAN progress = FALSE;
-        ULONG stNow = MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS);
-        if (stNow & M_SPI_ERR_MASK) {
-            st = stNow;
-            break;
-        }
-        while (txDone < Len && (MmioRead32(&Bus->Se, SE_GENI_TX_FIFO_STATUS) & TX_FIFO_WC_MASK) < Bus->TxDepth) {
-            ULONG word = 0, n = min(4u, Len - txDone);
-            if (Tx != NULL) {
-                RtlCopyMemory(&word, Tx + txDone, n);
-            }
-            MmioWrite32(&Bus->Se, SE_GENI_TX_FIFOn, word);
-            txDone += n;
-            progress = TRUE;
-        }
-        {
-            ULONG rwords = MmioRead32(&Bus->Se, SE_GENI_RX_FIFO_STATUS) & RX_FIFO_WC_MASK;
-            while (rwords-- && rxDone < Len) {
-                ULONG word = MmioRead32(&Bus->Se, SE_GENI_RX_FIFOn);
-                ULONG n = min(4u, Len - rxDone);
-                if (Rx != NULL) {
-                    RtlCopyMemory(Rx + rxDone, &word, n);
-                }
-                rxDone += n;
-                progress = TRUE;
-            }
-        }
-        if (!progress) {
-            KeStallExecutionProcessor(2);
-            spins++;
+            Rx[i] = rxByte;
         }
     }
 
-    for (spins = 0; spins < 20000; spins++) {
-        st = MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS);
-        if (st & (M_CMD_DONE_EN | M_SPI_ERR_MASK)) {
-            break;
-        }
-        KeStallExecutionProcessor(2);
-    }
-    while (rxDone < Len) {
-        ULONG rwords = MmioRead32(&Bus->Se, SE_GENI_RX_FIFO_STATUS) & RX_FIFO_WC_MASK;
-        if (rwords == 0) {
-            break;
-        }
-        while (rwords-- && rxDone < Len) {
-            ULONG word = MmioRead32(&Bus->Se, SE_GENI_RX_FIFOn);
-            ULONG n = min(4u, Len - rxDone);
-            if (Rx != NULL) {
-                RtlCopyMemory(Rx + rxDone, &word, n);
-            }
-            rxDone += n;
-        }
-    }
-    Bus->LastIrqStatus = st;
-    MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, st);
+    /* d) Set CS (GPIO 3) = 1 (idle high), KeStallExecutionProcessor(1) */
+    TlmmSetPin(Bus, TS_PIN_SPI_CS, TRUE);
+    KeStallExecutionProcessor(1);
 
-    if ((st & M_SPI_ERR_MASK) || !(st & M_CMD_DONE_EN) || rxDone != Len) {
-        LogPrint("GeniSpiXfer err: st=%08x rxDone=%u/%u geni_st=%08x rx_fifo_st=%08x\n",
-                 st, rxDone, Len,
-                 MmioRead32(&Bus->Se, SE_GENI_STATUS),
-                 MmioRead32(&Bus->Se, SE_GENI_RX_FIFO_STATUS));
-        GeniCancel(Bus);
-        return (st & M_SPI_ERR_MASK) ? STATUS_DEVICE_PROTOCOL_ERROR : STATUS_IO_TIMEOUT;
-    }
     return STATUS_SUCCESS;
 }
 
