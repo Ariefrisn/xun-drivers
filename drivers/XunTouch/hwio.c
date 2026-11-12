@@ -186,16 +186,11 @@ NTSTATUS GeniSpiInit(PGENI_SPI Bus, ULONGLONG SeBase)
 
     Bus->Proto = (MmioRead32(&Bus->Se, GENI_FW_REVISION_RO) >> 8) & 0xFF;
     Bus->TxDepth = (MmioRead32(&Bus->Se, SE_HW_PARAM_0) >> 16) & 0x3F;
-    LogPrint("GENI SPI %llx: fw_rev=%08x proto=%u tx_depth=%u status=%08x\n",
+    LogPrint("GENI SPI %llx: fw_rev=%08x proto=%u tx_depth=%u status=%08x if_dis=%08x clk_ctrl=%08x\n",
              SeBase, MmioRead32(&Bus->Se, GENI_FW_REVISION_RO), Bus->Proto, Bus->TxDepth,
-             MmioRead32(&Bus->Se, SE_GENI_STATUS));
-    {
-        ULONG ifDis = MmioRead32(&Bus->Se, GENI_IF_DISABLE_RO);
-        ULONG clkCtrl = MmioRead32(&Bus->Se, GENI_CLK_CTRL_RO);
-        Bus->UseDma = (ifDis & FIFO_IF_DISABLE) ? TRUE : FALSE;
-        LogPrint("GENI SPI cfg: if_dis=%08x clk_ctrl=%08x use_dma=%u\n",
-                 ifDis, clkCtrl, (ULONG)Bus->UseDma);
-    }
+             MmioRead32(&Bus->Se, SE_GENI_STATUS),
+             MmioRead32(&Bus->Se, GENI_IF_DISABLE_RO),
+             MmioRead32(&Bus->Se, GENI_CLK_CTRL_RO));
     if (Bus->Proto != GENI_PROTO_SPI) {
         GeniSpiDeinit(Bus);
         return STATUS_DEVICE_CONFIGURATION_ERROR;
@@ -212,18 +207,12 @@ NTSTATUS GeniSpiInit(PGENI_SPI Bus, ULONGLONG SeBase)
     MmioWrite32(&Bus->Se, GENI_FORCE_DEFAULT_REG, 1);
     MmioWrite32(&Bus->Se, SE_IRQ_EN, MmioRead32(&Bus->Se, SE_IRQ_EN) | (1u << 2) | (1u << 3));
 
-    /* DMA or FIFO mode based on FIFO_IF_DISABLE register */
-    if (Bus->UseDma) {
-        MmioWrite32(&Bus->Se, SE_GENI_DMA_MODE_EN, 1u);
-        MmioWrite32(&Bus->Se, SE_DMA_TX_IRQ_EN_SET, 0x7u);
-        MmioWrite32(&Bus->Se, SE_DMA_RX_IRQ_EN_SET, 0x7u);
-    } else {
-        MmioWrite32(&Bus->Se, SE_GENI_DMA_MODE_EN, 0u);
-        MmioWrite32(&Bus->Se, SE_GENI_TX_WATERMARK_REG, 0u);
-        MmioWrite32(&Bus->Se, SE_GENI_RX_WATERMARK_REG, (Bus->TxDepth > 3) ? (Bus->TxDepth - 3) : 1u);
-        MmioWrite32(&Bus->Se, SE_GENI_RX_RFR_WATERMARK_REG, (Bus->TxDepth > 2) ? (Bus->TxDepth - 2) : 2u);
-    }
+    /* Disable DMA mode explicitly (SE_DMA_MODE_EN = 0) */
+    MmioWrite32(&Bus->Se, SE_GENI_DMA_MODE_EN, 0);
     MmioWrite32(&Bus->Se, SE_GSI_EVENT_EN, 0);
+    MmioWrite32(&Bus->Se, SE_GENI_TX_WATERMARK_REG, 0u);
+    MmioWrite32(&Bus->Se, SE_GENI_RX_WATERMARK_REG, Bus->TxDepth - 3);
+    MmioWrite32(&Bus->Se, SE_GENI_RX_RFR_WATERMARK_REG, Bus->TxDepth - 2);
     v = MmioRead32(&Bus->Se, SE_GENI_M_IRQ_EN);
     v |= M_CMD_DONE_EN | M_SPI_ERR_MASK | M_RX_FIFO_WATERMARK_EN | M_RX_FIFO_LAST_EN | M_TX_FIFO_WATERMARK_EN;
     MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_EN, v);
@@ -296,56 +285,6 @@ NTSTATUS GeniSpiXfer(PGENI_SPI Bus, const UCHAR *Tx, UCHAR *Rx, ULONG Len)
     if (Len == 0) {
         return STATUS_SUCCESS;
     }
-
-    /* ---- SE-DMA path (when FIFO interface is disabled by hardware) ---- */
-    if (Bus->UseDma) {
-        PHYSICAL_ADDRESS txPa, rxPa;
-        ULONG spins;
-        if (Len > FTS_SPI_SCRATCH_SZ) return STATUS_INVALID_PARAMETER;
-        RtlZeroMemory(Bus->TxScratch, Len);
-        RtlZeroMemory(Bus->RxScratch, Len);
-        if (Tx) RtlCopyMemory(Bus->TxScratch, Tx, Len);
-        txPa = MmGetPhysicalAddress(Bus->TxScratch);
-        rxPa = MmGetPhysicalAddress(Bus->RxScratch);
-
-        MmioWrite32(&Bus->Se, SE_DMA_TX_IRQ_CLR, 0xFFFFFFFFu);
-        MmioWrite32(&Bus->Se, SE_DMA_RX_IRQ_CLR, 0xFFFFFFFFu);
-        MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFFu);
-
-        MmioWrite32(&Bus->Se, SE_SPI_TRANS_CFG, 0u);
-        MmioWrite32(&Bus->Se, SE_SPI_TX_TRANS_LEN, Len);
-        MmioWrite32(&Bus->Se, SE_SPI_RX_TRANS_LEN, Len);
-        MmioWrite32(&Bus->Se, SE_GENI_M_CMD0, (SPI_OP_TX_RX << M_OPCODE_SHIFT));
-
-        MmioWrite32(&Bus->Se, SE_DMA_RX_PTR_L, rxPa.LowPart);
-        MmioWrite32(&Bus->Se, SE_DMA_RX_PTR_H, (ULONG)rxPa.HighPart);
-        MmioWrite32(&Bus->Se, SE_DMA_RX_ATTR, 0u);
-        MmioWrite32(&Bus->Se, SE_DMA_RX_LEN, Len);
-
-        MmioWrite32(&Bus->Se, SE_DMA_TX_PTR_L, txPa.LowPart);
-        MmioWrite32(&Bus->Se, SE_DMA_TX_PTR_H, (ULONG)txPa.HighPart);
-        MmioWrite32(&Bus->Se, SE_DMA_TX_ATTR, 1u);
-        MmioWrite32(&Bus->Se, SE_DMA_TX_LEN, Len);
-
-        st = 0;
-        for (spins = 0; spins < 50000; spins++) {
-            st = MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS);
-            if (st & (M_CMD_DONE_EN | M_SPI_ERR_MASK)) break;
-            KeStallExecutionProcessor(2);
-        }
-        Bus->LastIrqStatus = st;
-        MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, st ? st : 0xFFFFFFFFu);
-        MmioWrite32(&Bus->Se, SE_DMA_TX_IRQ_CLR, 0xFFFFFFFFu);
-        MmioWrite32(&Bus->Se, SE_DMA_RX_IRQ_CLR, 0xFFFFFFFFu);
-        if ((st & M_SPI_ERR_MASK) || !(st & M_CMD_DONE_EN)) {
-            GeniCancel(Bus);
-            return (st & M_SPI_ERR_MASK) ? STATUS_DEVICE_PROTOCOL_ERROR : STATUS_IO_TIMEOUT;
-        }
-        if (Rx) RtlCopyMemory(Rx, Bus->RxScratch, Len);
-        return STATUS_SUCCESS;
-    }
-
-    /* ---- FIFO path ---- */
     if (MmioRead32(&Bus->Se, SE_GENI_STATUS) & 1u) {
         GeniCancel(Bus);
     }
@@ -409,72 +348,10 @@ NTSTATUS GeniSpiXfer(PGENI_SPI Bus, const UCHAR *Tx, UCHAR *Rx, ULONG Len)
     MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, st);
 
     if ((st & M_SPI_ERR_MASK) || !(st & M_CMD_DONE_EN) || rxDone != Len) {
-        /* Log diagnostics on timeout (st == 0) */
-        if (st == 0) {
-            ULONG geniSt = MmioRead32(&Bus->Se, SE_GENI_STATUS);
-            ULONG rxFifoSt = MmioRead32(&Bus->Se, SE_GENI_RX_FIFO_STATUS);
-            LogPrint("GeniSpiXfer FIFO timeout: geni_status=%08x rx_fifo_status=%08x\n",
-                     geniSt, rxFifoSt);
-            /* One fallback: retry with SPI_OP_TX_RX_ALT (opcode 7) */
-            GeniCancel(Bus);
-            {
-                ULONG txD2 = 0, rxD2 = 0, sp2 = 0, st2 = 0;
-                BOOLEAN prog2;
-                MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFFu);
-                MmioWrite32(&Bus->Se, SE_SPI_TRANS_CFG, 0u);
-                MmioWrite32(&Bus->Se, SE_SPI_WORD_LEN, 8 - 4);
-                MmioWrite32(&Bus->Se, SE_SPI_TX_TRANS_LEN, Len);
-                MmioWrite32(&Bus->Se, SE_SPI_RX_TRANS_LEN, Len);
-                MmioWrite32(&Bus->Se, SE_GENI_M_CMD0, (SPI_OP_TX_RX_ALT << M_OPCODE_SHIFT));
-                while ((txD2 < Len || rxD2 < Len) && sp2 < 50000) {
-                    prog2 = FALSE;
-                    if (MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS) & M_SPI_ERR_MASK) {
-                        st2 = MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS);
-                        break;
-                    }
-                    while (txD2 < Len && (MmioRead32(&Bus->Se, SE_GENI_TX_FIFO_STATUS) & TX_FIFO_WC_MASK) < Bus->TxDepth) {
-                        ULONG word2 = 0, n2 = min(4u, Len - txD2);
-                        RtlCopyMemory(&word2, Tx + txD2, n2);
-                        MmioWrite32(&Bus->Se, SE_GENI_TX_FIFOn, word2);
-                        txD2 += n2;
-                        prog2 = TRUE;
-                    }
-                    {
-                        ULONG rw2 = MmioRead32(&Bus->Se, SE_GENI_RX_FIFO_STATUS) & RX_FIFO_WC_MASK;
-                        while (rw2-- && rxD2 < Len) {
-                            ULONG word2 = MmioRead32(&Bus->Se, SE_GENI_RX_FIFOn);
-                            ULONG n2 = min(4u, Len - rxD2);
-                            RtlCopyMemory(Rx + rxD2, &word2, n2);
-                            rxD2 += n2;
-                            prog2 = TRUE;
-                        }
-                    }
-                    if (!prog2) { KeStallExecutionProcessor(2); sp2++; }
-                }
-                for (sp2 = 0; sp2 < 20000; sp2++) {
-                    st2 = MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS);
-                    if (st2 & (M_CMD_DONE_EN | M_SPI_ERR_MASK)) break;
-                    KeStallExecutionProcessor(2);
-                }
-                while (rxD2 < Len) {
-                    ULONG rw2 = MmioRead32(&Bus->Se, SE_GENI_RX_FIFO_STATUS) & RX_FIFO_WC_MASK;
-                    if (rw2 == 0) break;
-                    while (rw2-- && rxD2 < Len) {
-                        ULONG word2 = MmioRead32(&Bus->Se, SE_GENI_RX_FIFOn);
-                        ULONG n2 = min(4u, Len - rxD2);
-                        RtlCopyMemory(Rx + rxD2, &word2, n2);
-                        rxD2 += n2;
-                    }
-                }
-                Bus->LastIrqStatus = st2;
-                MmioWrite32(&Bus->Se, SE_GENI_M_IRQ_CLEAR, st2 ? st2 : 0xFFFFFFFFu);
-                if ((st2 & M_SPI_ERR_MASK) || !(st2 & M_CMD_DONE_EN) || rxD2 != Len) {
-                    GeniCancel(Bus);
-                    return (st2 & M_SPI_ERR_MASK) ? STATUS_DEVICE_PROTOCOL_ERROR : STATUS_IO_TIMEOUT;
-                }
-                return STATUS_SUCCESS;
-            }
-        }
+        LogPrint("GeniSpiXfer err: st=%08x rxDone=%u/%u geni_st=%08x rx_fifo_st=%08x\n",
+                 st, rxDone, Len,
+                 MmioRead32(&Bus->Se, SE_GENI_STATUS),
+                 MmioRead32(&Bus->Se, SE_GENI_RX_FIFO_STATUS));
         GeniCancel(Bus);
         return (st & M_SPI_ERR_MASK) ? STATUS_DEVICE_PROTOCOL_ERROR : STATUS_IO_TIMEOUT;
     }
