@@ -201,11 +201,20 @@ static USHORT FtsCrc16(const UCHAR *Data, ULONG Len)
 
 NTSTATUS FtsSpiWrite(PGENI_SPI Bus, const UCHAR *Buf, ULONG Len)
 {
-    ULONG xfer = (Len > 1) ? (Len + 6) : 4;
+    ULONG hdrExtra;
+    ULONG xfer;
     ULONG attempt;
     NTSTATUS status = STATUS_INVALID_PARAMETER;
 
-    if (Len == 0 || xfer > Bus->ScratchSize) {
+    if (Buf == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (Len == 0) {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    hdrExtra = (Buf[0] == 0xAE) ? 3u : 6u;
+    xfer = (Len > 1) ? (Len + hdrExtra) : 4u;
+    if (xfer > Bus->ScratchSize) {
         return STATUS_BUFFER_TOO_SMALL;
     }
     for (attempt = 0; attempt < 3; attempt++) {
@@ -216,7 +225,14 @@ NTSTATUS FtsSpiWrite(PGENI_SPI Bus, const UCHAR *Buf, ULONG Len)
         Bus->TxScratch[2] = (UCHAR)(((Len - 1) >> 8) & 0xFF);
         Bus->TxScratch[3] = (UCHAR)((Len - 1) & 0xFF);
         if (Len > 1) {
-            RtlCopyMemory(Bus->TxScratch + 7, Buf + 1, Len - 1);
+            if (Buf[0] == 0xAE) {
+                RtlCopyMemory(Bus->TxScratch + 4, Buf + 1, Len - 1);
+            } else {
+                Bus->TxScratch[4] = 0x00;
+                Bus->TxScratch[5] = 0x00;
+                Bus->TxScratch[6] = 0x00;
+                RtlCopyMemory(Bus->TxScratch + 7, Buf + 1, Len - 1);
+            }
         }
         status = GeniSpiXfer(Bus, Bus->TxScratch, Bus->RxScratch, xfer);
         if (NT_SUCCESS(status) && (Bus->RxScratch[3] & 0xA0) == 0) {
