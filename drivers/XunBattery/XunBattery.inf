@@ -26,6 +26,7 @@ XunBattery.sys = 1,,
 
 [Standard.NT$ARCH$.10.0...16299]
 %DeviceDesc% = XunBattery_Device, Root\XunBattery
+%DeviceDesc% = XunBattery_Device, ACPI\SH366101
 
 [XunBattery_Device.NT]
 CopyFiles = XunBattery_CopyFiles

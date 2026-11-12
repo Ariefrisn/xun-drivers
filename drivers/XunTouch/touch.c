@@ -337,7 +337,12 @@ NTSTATUS TouchHwInit(PDEVICE_CONTEXT Ctx) {
   }
   TlmmConfig(&Ctx->PinIrq, 0, TLMM_PULL_UP, 8, FALSE);
   TlmmConfig(&Ctx->PinReset, 0, TLMM_PULL_UP, 8, TRUE);
+
+  /* Precise initial hardware reset pulse on TLMM GPIO 86 (0x00556000) */
+  TlmmSetOutput(&Ctx->PinReset, FALSE);
+  SleepMs(20);
   TlmmSetOutput(&Ctx->PinReset, TRUE);
+  SleepMs(15);
 
   status = GccEnableQup0Se0();
   if (!NT_SUCCESS(status)) {
@@ -349,16 +354,15 @@ NTSTATUS TouchHwInit(PDEVICE_CONTEXT Ctx) {
     return status;
   }
 
-  /* Probe without reset first in case bootloader left running firmware */
   status = FtsReadReg(&Ctx->Bus, FTS_REG_CHIP_ID, &id1);
-  LogPrint("probe (no reset): chip_id=%02x status=%08x\n", id1, status);
+  LogPrint("probe: chip_id=%02x status=%08x\n", id1, status);
   if (!NT_SUCCESS(status) || !FtsFwValid(id1)) {
     TlmmSetOutput(&Ctx->PinReset, FALSE);
     SleepMs(20);
     TlmmSetOutput(&Ctx->PinReset, TRUE);
     SleepMs(250);
     status = FtsReadReg(&Ctx->Bus, FTS_REG_CHIP_ID, &id1);
-    LogPrint("probe (after reset): chip_id=%02x status=%08x\n", id1, status);
+    LogPrint("probe (after retry reset): chip_id=%02x status=%08x\n", id1, status);
     if (!NT_SUCCESS(status) || !FtsFwValid(id1)) {
       if (NT_SUCCESS(FtsTryUploadPram(Ctx))) {
         status = FtsReadReg(&Ctx->Bus, FTS_REG_CHIP_ID, &id1);
@@ -560,6 +564,8 @@ static VOID TouchThread(PVOID Context) {
         LogPrint("SPI read err %08x irq=%08x\n", status,
                  Ctx->Bus.LastIrqStatus);
       }
+      /* Prevent CPU-hogging busy-wait loop / race-condition with DWM memory allocation (Fix BSOD 0x50) */
+      SleepMs(errors > 20 ? 200 : 50);
       continue;
     }
     if (RtlCompareMemory(buf, prev, sizeof(buf)) != sizeof(buf)) {

@@ -26,6 +26,7 @@ XunBacklight.sys = 1,,
 
 [Standard.NT$ARCH$.10.0...16299]
 %DeviceDesc% = XunBacklight_Device, Root\XunBacklight
+%DeviceDesc% = XunBacklight_Device, ACPI\KTZ8866
 
 [XunBacklight_Device.NT]
 CopyFiles = XunBacklight_CopyFiles

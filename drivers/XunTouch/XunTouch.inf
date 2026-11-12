@@ -26,6 +26,8 @@ XunTouch.sys = 1,,
 
 [Standard.NT$ARCH$.10.0...16299]
 %DeviceDesc% = XunTouch_Device, Root\XunTouch
+%DeviceDesc% = XunTouch_Device, ACPI\XUNT0001
+%DeviceDesc% = XunTouch_Device, ACPI\FTS8203
 
 [XunTouch_Device.NT]
 CopyFiles = XunTouch_CopyFiles

@@ -156,6 +156,21 @@ NTSTATUS GeniSpiInit(PGENI_SPI Bus, ULONGLONG SeBase)
 {
     NTSTATUS status;
     ULONG v;
+    MMIO_RANGE tlmm = {0};
+    ULONG pin;
+
+    /* 1. Direct TLMM pinmux: map TLMM WEST (0x00500000) for SPI pins GPIO 0..3 */
+    status = MmioMap(&tlmm, TLMM_BASE + TLMM_TILE_WEST, 0x4000);
+    if (NT_SUCCESS(status)) {
+        for (pin = 0; pin < 4; pin++) {
+            /* FUNC_SEL = 1 (qup0), PULL = 3 (pull-up), DRV = 2 (6mA), OE = 0 */
+            ULONG ctl = (TLMM_PULL_UP & 0x3) | ((TS_PIN_SPI_FUNC & 0xF) << 2) | ((TLMM_DRV_MA(6) & 0x7) << 6);
+            MmioWrite32(&tlmm, pin * TLMM_PIN_STRIDE + TLMM_CTL, ctl);
+        }
+        MmioUnmap(&tlmm);
+        LogPrint("GeniSpiInit: programmed TLMM GPIO 0..3 FUNC_SEL=qup0 (0x%03x)\n",
+                 (TLMM_PULL_UP & 0x3) | ((TS_PIN_SPI_FUNC & 0xF) << 2) | ((TLMM_DRV_MA(6) & 0x7) << 6));
+    }
 
     status = MmioMap(&Bus->Se, SeBase, GENI_SE_SIZE);
     if (!NT_SUCCESS(status)) {
@@ -187,7 +202,9 @@ NTSTATUS GeniSpiInit(PGENI_SPI Bus, ULONGLONG SeBase)
     MmioWrite32(&Bus->Se, GENI_OUTPUT_CTRL, 0x7F);
     MmioWrite32(&Bus->Se, GENI_FORCE_DEFAULT_REG, 1);
     MmioWrite32(&Bus->Se, SE_IRQ_EN, MmioRead32(&Bus->Se, SE_IRQ_EN) | (1u << 2) | (1u << 3));
-    MmioWrite32(&Bus->Se, SE_GENI_DMA_MODE_EN, MmioRead32(&Bus->Se, SE_GENI_DMA_MODE_EN) & ~1u);
+
+    /* Disable DMA mode explicitly (SE_DMA_MODE_EN = 0) */
+    MmioWrite32(&Bus->Se, SE_GENI_DMA_MODE_EN, 0);
     MmioWrite32(&Bus->Se, SE_GSI_EVENT_EN, 0);
     MmioWrite32(&Bus->Se, SE_GENI_RX_WATERMARK_REG, Bus->TxDepth - 1);
     MmioWrite32(&Bus->Se, SE_GENI_RX_RFR_WATERMARK_REG, Bus->TxDepth);
@@ -205,7 +222,12 @@ NTSTATUS GeniSpiInit(PGENI_SPI Bus, ULONGLONG SeBase)
     MmioWrite32(&Bus->Se, SE_SPI_TRANS_CFG, 0);
     MmioWrite32(&Bus->Se, SE_SPI_WORD_LEN, 8 - 4);
     MmioWrite32(&Bus->Se, SE_GENI_CLK_SEL, 0);
+
+    /* Turn on GENI_SER_M_CLK_CFG */
     MmioWrite32(&Bus->Se, GENI_SER_M_CLK_CFG, (SPI_6P4M_CLK_DIV << 4) | 1u);
+    LogPrint("GeniSpiInit: GENI_SER_M_CLK_CFG = %08x, DMA_MODE_EN = %08x\n",
+             MmioRead32(&Bus->Se, GENI_SER_M_CLK_CFG),
+             MmioRead32(&Bus->Se, SE_GENI_DMA_MODE_EN));
     return STATUS_SUCCESS;
 }
 
@@ -267,7 +289,7 @@ NTSTATUS GeniSpiXfer(PGENI_SPI Bus, const UCHAR *Tx, UCHAR *Rx, ULONG Len)
     MmioWrite32(&Bus->Se, SE_SPI_RX_TRANS_LEN, Len);
     MmioWrite32(&Bus->Se, SE_GENI_M_CMD0, (SPI_OP_TX_RX << M_OPCODE_SHIFT));
 
-    while ((txDone < Len || rxDone < Len) && spins < 50000) {
+    while ((txDone < Len || rxDone < Len) && spins < 2000) {
         BOOLEAN progress = FALSE;
         ULONG stNow = MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS);
         if (stNow & M_SPI_ERR_MASK) {
@@ -297,7 +319,7 @@ NTSTATUS GeniSpiXfer(PGENI_SPI Bus, const UCHAR *Tx, UCHAR *Rx, ULONG Len)
         }
     }
 
-    for (spins = 0; spins < 20000; spins++) {
+    for (spins = 0; spins < 1000; spins++) {
         st = MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS);
         if (st & (M_CMD_DONE_EN | M_SPI_ERR_MASK)) {
             break;
