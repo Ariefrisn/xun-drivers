@@ -120,6 +120,12 @@ static BOOLEAN BranchOn(volatile UCHAR *B, ULONG Off, PCSTR Name)
     return ok;
 }
 
+static VOID BranchEnableNoWait(volatile UCHAR *B, ULONG Off, PCSTR Name)
+{
+    UNREFERENCED_PARAMETER(Name);
+    Rmw(B, Off, 0, CBCR_EN);
+}
+
 static BOOLEAN RcgSet(ULONG Cmd, ULONG Src, ULONG Div)
 {
     Wr(g_GpuCc, Cmd + 4, (Src << 8) | (2 * Div - 1));
@@ -320,8 +326,8 @@ static BOOLEAN PowerUp(VOID)
     PowerCycleIfOn();
     Rmw(g_Gcc, 0x79004, 0, 1u << 15);                    /* GPLL0 to the GPU CC */
     BranchOn(g_Gcc, 0x71154, "gcc_bimc_gpu_axi");
-    BranchOn(g_Gcc, 0x3600c, "gcc_gpu_memnoc_gfx");      /* voted: may read off */
-    BranchOn(g_Gcc, 0x36018, "gcc_gpu_snoc_dvm_gfx");
+    BranchEnableNoWait(g_Gcc, 0x3600c, "gcc_gpu_memnoc_gfx");      /* voted NOC branch: BRANCH_HALT_SKIP */
+    BranchEnableNoWait(g_Gcc, 0x36018, "gcc_gpu_snoc_dvm_gfx");
     if (!GdscOn(0x106c, 0, 0, 0x1540)) {
         LogPrint("  CX GDSC: no PWR_ON\n");
         return FALSE;

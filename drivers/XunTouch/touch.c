@@ -565,7 +565,7 @@ static VOID TouchThread(PVOID Context) {
                  Ctx->Bus.LastIrqStatus);
       }
       /* Prevent CPU-hogging busy-wait loop / race-condition with DWM memory allocation (Fix BSOD 0x50) */
-      SleepMs(errors > 20 ? 200 : 50);
+      SleepMs(errors > 20 ? 1000 : 50);
       continue;
     }
     if (RtlCompareMemory(buf, prev, sizeof(buf)) != sizeof(buf)) {

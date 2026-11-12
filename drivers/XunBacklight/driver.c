@@ -14,7 +14,9 @@
 #include "driver.h"
 #include "xun_ktz8866.h"
 
-#define XUN_BL_VERSION       "v0.6"
+#define XUN_BL_VERSION       "v0.7"
+
+static LONG g_DeviceCount = 0;
 
 #define DSI0_PA              0x05E94000ULL
 #define DSI0_SIZE            0x400
@@ -265,6 +267,9 @@ static VOID PollThread(PVOID Context)
 
     while (KeWaitForSingleObject(&C->StopEvent, Executive, KernelMode, FALSE, &period) == STATUS_TIMEOUT) {
         LONG pct = ReadPercent();
+        if (pct < 0) {
+            pct = 80; /* default fallback 80% if C:\xun\brightness missing or unreadable */
+        }
         if (pct >= 0 && pct != C->LastPct) {
             if (SetLevel(C, pct)) {
                 C->LastPct = pct;
@@ -296,6 +301,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 static VOID EvtDriverUnload(WDFDRIVER Driver)
 {
     UNREFERENCED_PARAMETER(Driver);
+    InterlockedDecrement(&g_DeviceCount);
     LogClose();
 }
 
@@ -307,6 +313,11 @@ static NTSTATUS EvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
     NTSTATUS status;
 
     UNREFERENCED_PARAMETER(Driver);
+    if (InterlockedIncrement(&g_DeviceCount) > 1) {
+        LogPrint("XunBacklight: duplicate device node detected (%d), rejecting duplicate instance\n", g_DeviceCount);
+        return STATUS_DEVICE_ALREADY_ATTACHED;
+    }
+
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
     pnp.EvtDevicePrepareHardware = EvtPrepareHardware;
     pnp.EvtDeviceReleaseHardware = EvtReleaseHardware;

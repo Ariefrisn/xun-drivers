@@ -23,3 +23,4 @@ hardware/
 - **Touchscreen:** FocalTech FT8203 SPI via QUP0 SE0 (`0x04A80000`), IRQ GPIO 80, RST GPIO 86
 - **Power / Buttons:** PM6125 PON (Power & Vol-), TLMM GPIO 5 (Vol+)
 - **Audio DSP:** Hexagon v66 LPASS ADSP PIL boot via `adsp.mdt`
+

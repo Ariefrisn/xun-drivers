@@ -289,7 +289,7 @@ NTSTATUS GeniSpiXfer(PGENI_SPI Bus, const UCHAR *Tx, UCHAR *Rx, ULONG Len)
     MmioWrite32(&Bus->Se, SE_SPI_RX_TRANS_LEN, Len);
     MmioWrite32(&Bus->Se, SE_GENI_M_CMD0, (SPI_OP_TX_RX << M_OPCODE_SHIFT));
 
-    while ((txDone < Len || rxDone < Len) && spins < 2000) {
+    while ((txDone < Len || rxDone < Len) && spins < 50000) {
         BOOLEAN progress = FALSE;
         ULONG stNow = MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS);
         if (stNow & M_SPI_ERR_MASK) {
@@ -314,17 +314,17 @@ NTSTATUS GeniSpiXfer(PGENI_SPI Bus, const UCHAR *Tx, UCHAR *Rx, ULONG Len)
             }
         }
         if (!progress) {
-            KeStallExecutionProcessor(1);
+            KeStallExecutionProcessor(2);
             spins++;
         }
     }
 
-    for (spins = 0; spins < 1000; spins++) {
+    for (spins = 0; spins < 20000; spins++) {
         st = MmioRead32(&Bus->Se, SE_GENI_M_IRQ_STATUS);
         if (st & (M_CMD_DONE_EN | M_SPI_ERR_MASK)) {
             break;
         }
-        KeStallExecutionProcessor(1);
+        KeStallExecutionProcessor(2);
     }
     while (rxDone < Len) {
         ULONG rwords = MmioRead32(&Bus->Se, SE_GENI_RX_FIFO_STATUS) & RX_FIFO_WC_MASK;

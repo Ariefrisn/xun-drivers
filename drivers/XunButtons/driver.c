@@ -68,6 +68,8 @@ typedef struct _DEVICE_CONTEXT {
   BOOLEAN HallSeenHigh;
   BOOLEAN LastHallClosed;
   UCHAR LastVol;
+  UCHAR PendingVol;
+  UCHAR VolDebounce;
   BOOLEAN HwReady;
   PKTHREAD Thread;
   KEVENT StopEvent;
@@ -128,9 +130,11 @@ static ULONG FindChannel(volatile UCHAR *Core, ULONG Ppid) {
 static NTSTATUS ObsRead(volatile UCHAR *Obs, UCHAR Offset, PUCHAR Value) {
   ULONG i, st;
 
+  /* Clear stale ARB status before dispatching new command */
+  WRITE_REGISTER_ULONG((volatile ULONG *)(Obs + ARB_STATUS), ARB_DONE | ARB_ERR);
   WRITE_REGISTER_ULONG((volatile ULONG *)(Obs + ARB_CMD),
                        (1u << 27) | ((ULONG)Offset << 4));
-  for (i = 0; i < 1000; i++) {
+  for (i = 0; i < 2000; i++) {
     st = READ_REGISTER_ULONG((volatile ULONG *)(Obs + ARB_STATUS));
     if (st & ARB_DONE) {
       if (st & ARB_ERR) {
@@ -139,7 +143,7 @@ static NTSTATUS ObsRead(volatile UCHAR *Obs, UCHAR Offset, PUCHAR Value) {
       *Value = (UCHAR)READ_REGISTER_ULONG((volatile ULONG *)(Obs + ARB_RDATA0));
       return STATUS_SUCCESS;
     }
-    KeStallExecutionProcessor(1);
+    KeStallExecutionProcessor(2);
   }
   return STATUS_IO_TIMEOUT;
 }
@@ -220,32 +224,35 @@ static NTSTATUS HwInit(PDEVICE_CONTEXT Ctx) {
   }
   Ctx->LastRt = rt & (RT_KPDPWR | RT_RESIN);
   Ctx->LastVol = (rt & RT_RESIN) ? 2 : 0;
+  Ctx->PendingVol = Ctx->LastVol;
+  Ctx->VolDebounce = 0;
 
-  /* Hall cover switch (dtbo_b.img hall_key: TLMM GPIO 66 WEST, active low) */
+  /* Hall cover switch (dtbo_b.img hall_key: TLMM GPIO 66 WEST, active low).
+   * Disabled by default to prevent false sleep during boot. Opt-in via C:\xun\hall.on */
   pa.QuadPart = (LONGLONG)TLMM_HALL_PA;
   Ctx->HallGpio = (volatile UCHAR *)MmMapIoSpaceEx(
       pa, 0x1000, PAGE_READWRITE | PAGE_NOCACHE);
   if (Ctx->HallGpio != NULL) {
-    UNICODE_STRING hOff = RTL_CONSTANT_STRING(L"\\??\\C:\\xun\\hall.off");
+    UNICODE_STRING hOn = RTL_CONSTANT_STRING(L"\\??\\C:\\xun\\hall.on");
     OBJECT_ATTRIBUTES oa;
     IO_STATUS_BLOCK iosb;
     HANDLE hf;
     ULONG io;
-    Ctx->HallEnabled = TRUE;
+    Ctx->HallEnabled = FALSE;
     InitializeObjectAttributes(
-        &oa, &hOff, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+        &oa, &hOn, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
     if (NT_SUCCESS(ZwCreateFile(
             &hf, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &oa, &iosb, NULL,
             FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN,
             FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0))) {
       ZwClose(hf);
-      Ctx->HallEnabled = FALSE;
+      Ctx->HallEnabled = TRUE;
     }
     io = READ_REGISTER_ULONG((volatile ULONG *)(Ctx->HallGpio + TLMM_IO)) & 1u;
     Ctx->HallSeenHigh = (io != 0);
     Ctx->LastHallClosed = FALSE;
     LogPrint("Hall GPIO 66 WEST: io=%u (%s)\n", io,
-             Ctx->HallEnabled ? "enabled" : "disabled (hall.off)");
+             Ctx->HallEnabled ? "enabled (hall.on)" : "disabled (default)");
   }
 
   Ctx->HwReady = TRUE;
@@ -372,11 +379,18 @@ static VOID PollThread(PVOID Context) {
       ctx->LastHallClosed = hallClosed;
     }
     ctx->LastRt = rt;
-    if (vol != ctx->LastVol) {
-      LogPrint("keys: vol+=%u vol-=%u\n", vol & 1, (vol >> 1) & 1);
-      SendReport(ctx, 2,
-                 vol); /* report 2: bit0 Volume Increment, bit1 Decrement */
-      ctx->LastVol = vol;
+    if (vol != ctx->PendingVol) {
+      ctx->PendingVol = vol;
+      ctx->VolDebounce = 1;
+    } else if (ctx->VolDebounce > 0) {
+      ctx->VolDebounce++;
+      if (ctx->VolDebounce >= 2 && vol != ctx->LastVol) {
+        LogPrint("keys: vol+=%u vol-=%u\n", vol & 1, (vol >> 1) & 1);
+        SendReport(ctx, 2,
+                   vol); /* report 2: bit0 Volume Increment, bit1 Decrement */
+        ctx->LastVol = vol;
+        ctx->VolDebounce = 0;
+      }
     }
   }
   LogPrint("poll thread exit\n");
@@ -392,7 +406,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   NTSTATUS status;
 
   LogOpen();
-  LogPrint("==== XunButtons v0.4 (Vol+) ====\n");
+  LogPrint("==== XunButtons v0.5 (Vol+ & Debounced) ====\n");
   WDF_DRIVER_CONFIG_INIT(&config, EvtDeviceAdd);
   config.EvtDriverUnload = EvtDriverUnload;
   status = WdfDriverCreate(DriverObject, RegistryPath, WDF_NO_OBJECT_ATTRIBUTES,

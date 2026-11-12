@@ -210,6 +210,9 @@ STATIC EFI_STATUS AdspLoad(EFI_FILE_PROTOCOL *Root)
   EFI_STATUS s;
 
   s = ReadFile (Root, L"\\image\\adsp.mdt", (VOID **)&mdt, &mdtSize, NULL, 0);
+  if (EFI_ERROR (s)) {
+    s = ReadFile (Root, L"\\adsp.mdt", (VOID **)&mdt, &mdtSize, NULL, 0);
+  }
   Out ("  adsp.mdt: %r, %lu bytes\r\n", s, (UINT64)mdtSize);
   if (EFI_ERROR (s)) {
     return s;
@@ -256,6 +259,10 @@ STATIC EFI_STATUS AdspLoad(EFI_FILE_PROTOCOL *Root)
     UINTN got = 0;
     UnicodeSPrint (name, sizeof (name), L"\\image\\adsp.b%02u", hashIdx);
     s = ReadFile (Root, name, NULL, &got, meta + sz, ph[hashIdx].p_filesz);
+    if (EFI_ERROR (s)) {
+      UnicodeSPrint (name, sizeof (name), L"\\adsp.b%02u", hashIdx);
+      s = ReadFile (Root, name, NULL, &got, meta + sz, ph[hashIdx].p_filesz);
+    }
     Out ("  hash from adsp.b%02u: %r, %lu of %u bytes\r\n", hashIdx, s, (UINT64)got, ph[hashIdx].p_filesz);
     if (EFI_ERROR (s) || got != ph[hashIdx].p_filesz) {
       s = EFI_LOAD_ERROR;
@@ -291,6 +298,10 @@ STATIC EFI_STATUS AdspLoad(EFI_FILE_PROTOCOL *Root)
     if (ph[i].p_filesz != 0) {
       UnicodeSPrint (name, sizeof (name), L"\\image\\adsp.b%02u", (UINT32)i);
       s = ReadFile (Root, name, NULL, &sz, dst, ph[i].p_memsz);
+      if (EFI_ERROR (s)) {
+        UnicodeSPrint (name, sizeof (name), L"\\adsp.b%02u", (UINT32)i);
+        s = ReadFile (Root, name, NULL, &sz, dst, ph[i].p_memsz);
+      }
       if (EFI_ERROR (s) || sz != ph[i].p_filesz) {
         Out ("  adsp.b%02u: %r (%lu of %u bytes)\r\n", (UINT32)i, s, (UINT64)sz, ph[i].p_filesz);
         UnmapPhys (dst, ph[i].p_memsz);

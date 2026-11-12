@@ -60,3 +60,4 @@ efi/
    ```bash
    python efi/scripts/pack_v4_uefi.py Mu-xun.img Mu-xun-v4.img
    ```
+
