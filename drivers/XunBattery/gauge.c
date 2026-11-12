@@ -445,7 +445,7 @@ static VOID ChargerPolicy(PDEVICE_CONTEXT Ctx, UCHAR R03, UCHAR R0B, BOOLEAN All
     }
 }
 
-static NTSTATUS FgReadWordRetry(PI2C_BUS Bus, UCHAR Addr, UCHAR Reg, PUSHORT Val)
+static NTSTATUS FgReadWordRetry(PGENI_I2C Bus, UCHAR Addr, UCHAR Reg, PUSHORT Val)
 {
     NTSTATUS s = STATUS_UNSUCCESSFUL;
     ULONG tries;
