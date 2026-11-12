@@ -251,7 +251,7 @@ static BOOLEAN FtsFwValid(UCHAR Id) {
   return (Id == 0x82 || Id == 0x80 || Id == 0x54 || Id == 0x58);
 }
 
-static NTSTATUS FtsTryUploadPram(PDEVICE_CONTEXT Ctx) {
+static NTSTATUS FtsTryUploadPramPath(PDEVICE_CONTEXT Ctx, PCWSTR ForcePath) {
   static const PCWSTR paths[] = {
       L"\\??\\C:\\xun\\fw\\focaltech_ts_fw.bin",
       L"\\??\\C:\\xun\\fw\\focaltech_ts_fw_huaxing_ft8203.bin",
@@ -261,10 +261,17 @@ static NTSTATUS FtsTryUploadPram(PDEVICE_CONTEXT Ctx) {
   UCHAR pkt[4 + 1024], cmd, romId[2] = {0};
   NTSTATUS status;
 
-  for (i = 0; i < ARRAYSIZE(paths) && fw == NULL; i++) {
-    fw = ReadWholeFile(paths[i], &fwLen);
+  if (ForcePath != NULL) {
+    fw = ReadWholeFile(ForcePath, &fwLen);
     if (fw != NULL) {
-      LogPrint("pram: loaded %ws (%u bytes)\n", paths[i], fwLen);
+      LogPrint("pram: loaded %ws (%u bytes)\n", ForcePath, fwLen);
+    }
+  } else {
+    for (i = 0; i < ARRAYSIZE(paths) && fw == NULL; i++) {
+      fw = ReadWholeFile(paths[i], &fwLen);
+      if (fw != NULL) {
+        LogPrint("pram: loaded %ws (%u bytes)\n", paths[i], fwLen);
+      }
     }
   }
   if (fw == NULL) {
@@ -296,18 +303,24 @@ static NTSTATUS FtsTryUploadPram(PDEVICE_CONTEXT Ctx) {
     RtlCopyMemory(pkt + 4, fw + off, chunk);
     status = FtsSpiWrite(&Ctx->Bus, pkt, 4 + chunk);
     if (!NT_SUCCESS(status)) {
-      LogPrint("pram: write err @%u status=%08x\n", off, status);
+      LogPrint("pram: write err off=%lu status=%08x\n", off, status);
       ExFreePoolWithTag(fw, XUN_POOL_TAG);
       return status;
     }
+    KeStallExecutionProcessor(500);
     off += chunk;
   }
   ExFreePoolWithTag(fw, XUN_POOL_TAG);
 
   cmd = 0x08; /* start PRAM app */
-  FtsSpiWrite(&Ctx->Bus, &cmd, 1);
+  status = FtsSpiWrite(&Ctx->Bus, &cmd, 1);
+  LogPrint("pram: start app status=%08x\n", status);
   SleepMs(200);
   return STATUS_SUCCESS;
+}
+
+static NTSTATUS FtsTryUploadPram(PDEVICE_CONTEXT Ctx) {
+  return FtsTryUploadPramPath(Ctx, NULL);
 }
 
 /* ---- Hardware -------------------------------------------------------------
@@ -367,6 +380,14 @@ NTSTATUS TouchHwInit(PDEVICE_CONTEXT Ctx) {
       if (NT_SUCCESS(FtsTryUploadPram(Ctx))) {
         status = FtsReadReg(&Ctx->Bus, FTS_REG_CHIP_ID, &id1);
         LogPrint("probe (after PRAM): chip_id=%02x status=%08x\n", id1, status);
+        if (!NT_SUCCESS(status) || !FtsFwValid(id1)) {
+          if (NT_SUCCESS(FtsTryUploadPramPath(
+                  Ctx, L"\\??\\C:\\xun\\fw\\focaltech_ts_fw_boe_ft8203.bin"))) {
+            status = FtsReadReg(&Ctx->Bus, FTS_REG_CHIP_ID, &id1);
+            LogPrint("probe (after PRAM BOE): chip_id=%02x status=%08x\n", id1,
+                     status);
+          }
+        }
       }
     }
   }

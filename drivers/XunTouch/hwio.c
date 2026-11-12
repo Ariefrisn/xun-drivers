@@ -224,6 +224,9 @@ NTSTATUS FtsSpiWrite(PGENI_SPI Bus, const UCHAR *Buf, ULONG Len)
         }
         KeStallExecutionProcessor(300);
     }
+    LogPrint("FtsSpiWrite busy cmd=%02x len=%lu rx0..3=%02x %02x %02x %02x\n",
+             Buf[0], Len, Bus->RxScratch[0], Bus->RxScratch[1],
+             Bus->RxScratch[2], Bus->RxScratch[3]);
     return NT_SUCCESS(status) ? STATUS_DEVICE_BUSY : status;
 }
 
@@ -231,6 +234,7 @@ NTSTATUS FtsSpiRead(PGENI_SPI Bus, UCHAR Reg, UCHAR *Buf, ULONG Len)
 {
     ULONG xfer = Len + 9;
     ULONG attempt;
+    USHORT lastCalcCrc = 0, lastRxCrc = 0;
     NTSTATUS status = STATUS_INVALID_PARAMETER;
 
     if (Len == 0 || xfer > Bus->ScratchSize) {
@@ -246,11 +250,15 @@ NTSTATUS FtsSpiRead(PGENI_SPI Bus, UCHAR Reg, UCHAR *Buf, ULONG Len)
         Bus->TxScratch[3] = (UCHAR)(Len & 0xFF);
         status = GeniSpiXfer(Bus, Bus->TxScratch, Bus->RxScratch, xfer);
         if (!NT_SUCCESS(status) || (Bus->RxScratch[3] & 0xA0) != 0) {
+            lastCalcCrc = 0;
+            lastRxCrc = 0;
             KeStallExecutionProcessor(300);
             continue;
         }
         calcCrc = FtsCrc16(Bus->RxScratch + 7, Len);
         rxCrc = (USHORT)Bus->RxScratch[7 + Len] | ((USHORT)Bus->RxScratch[8 + Len] << 8);
+        lastCalcCrc = calcCrc;
+        lastRxCrc = rxCrc;
         if (calcCrc == rxCrc) {
             RtlCopyMemory(Buf, Bus->RxScratch + 7, Len);
             return STATUS_SUCCESS;
@@ -258,6 +266,9 @@ NTSTATUS FtsSpiRead(PGENI_SPI Bus, UCHAR Reg, UCHAR *Buf, ULONG Len)
         status = STATUS_CRC_ERROR;
         KeStallExecutionProcessor(300);
     }
+    LogPrint("FtsSpiRead busy/crc reg=%02x len=%lu rx0..3=%02x %02x %02x %02x calc=%04x rx=%04x\n",
+             Reg, Len, Bus->RxScratch[0], Bus->RxScratch[1],
+             Bus->RxScratch[2], Bus->RxScratch[3], lastCalcCrc, lastRxCrc);
     return NT_SUCCESS(status) ? STATUS_DEVICE_BUSY : status;
 }
 
