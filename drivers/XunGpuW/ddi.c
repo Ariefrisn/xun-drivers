@@ -361,6 +361,9 @@ static NTSTATUS QueryAdapterInfoInner(const DXGKARG_QUERYADAPTERINFO *Q)
         c->PresentationCaps.AlignmentShift = 2;
         c->PresentationCaps.MaxTextureWidthShift = 2;
         c->PresentationCaps.MaxTextureHeightShift = 2;
+        if (Q->OutputDataSize >= RTL_SIZEOF_THROUGH_FIELD(DXGK_DRIVERCAPS, SupportSmoothRotation)) {
+            c->SupportSmoothRotation = 1;
+        }
         return STATUS_SUCCESS;
     }
     case DXGKQAITYPE_QUERYSEGMENT3: {
@@ -1120,10 +1123,7 @@ static NTSTATUS TgQueryDeviceDescriptor(const PVOID Ctx, ULONG Uid, PDXGK_DEVICE
 
 static NTSTATUS APIENTRY TgIsSupportedVidPn(const HANDLE hAdapter, DXGKARG_ISSUPPORTEDVIDPN *A)
 {
-    UNREFERENCED_PARAMETER(hAdapter);
-    A->IsVidPnSupported = TRUE;                          /* one source, one target: any topology of them */
-    LogPrint("IsSupportedVidPn %p -> yes\n", A->hDesiredVidPn);
-    return STATUS_SUCCESS;
+    return DispIsSupportedVidPn(&((TGPU_ADAPTER *)hAdapter)->Dxgk, A);
 }
 
 static NTSTATUS APIENTRY TgRecommendFunctionalVidPn(const HANDLE hAdapter, const DXGKARG_RECOMMENDFUNCTIONALVIDPN *const A)
@@ -1175,8 +1175,7 @@ static NTSTATUS APIENTRY TgUpdateActiveVidPnPresentPath(const HANDLE hAdapter,
                                                         const DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH *const A)
 {
     UNREFERENCED_PARAMETER(hAdapter);
-    UNREFERENCED_PARAMETER(A);
-    return STATUS_SUCCESS;
+    return DispUpdateActivePath(A);
 }
 
 #define VIDPN_STUB(Name, ArgType) \
