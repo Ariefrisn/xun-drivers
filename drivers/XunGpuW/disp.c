@@ -86,13 +86,13 @@ static VOID MdpScanFrom(ULONG Pa, ULONG Stride, BOOLEAN Flip)
     WRITE_REGISTER_ULONG((volatile ULONG *)(g_Mdp + MDP_CTL0 + CTL_FLUSH), CTL_FLUSH_VIG0 | CTL_FLUSH_CTL);
 }
 
-/* point VIG0 at Al when it is a BO-backed portrait primary (Identity or 180-deg); TRUE = no CPU copy needed. Any IRQL. */
+/* point VIG0 at Al when it is a BO-backed panel-axis primary (Identity/180/90/270 if already WxH); TRUE = no CPU copy needed. Any IRQL. */
 static BOOLEAN DirectSelect(TGPU_ALLOCATION *Al)
 {
     D3DKMDT_VIDPN_PRESENT_PATH_ROTATION rot = (D3DKMDT_VIDPN_PRESENT_PATH_ROTATION)g_PathRotation;
 
     if (g_DirectOk && Al != NULL && Al->Bo != NULL &&
-        (rot == D3DKMDT_VPPR_IDENTITY || rot == D3DKMDT_VPPR_ROTATE180) &&
+        (rot == D3DKMDT_VPPR_IDENTITY || rot == D3DKMDT_VPPR_ROTATE180 || IsRotationLandscape(rot)) &&
         Al->Desc.width == g_Post.Width && Al->Desc.height == g_Post.Height &&
         Al->Bo->Iova + Al->Desc.bo_offset < 0x100000000ULL) {
         BOOLEAN flip = (rot == D3DKMDT_VPPR_ROTATE180) ? !g_DispFlip : g_DispFlip;
@@ -356,7 +356,7 @@ static VOID CopyRectToFb(PUCHAR Src, SIZE_T MaxBytes, ULONG SrcPitch, ULONG SrcW
     LONG l = R->left, t = R->top, r = R->right, b = R->bottom, y;
     ULONG w = g_Post.Width, h = g_Post.Height;
     D3DKMDT_VIDPN_PRESENT_PATH_ROTATION rot = (D3DKMDT_VIDPN_PRESENT_PATH_ROTATION)g_PathRotation;
-    BOOLEAN swapXY = IsRotationLandscape(rot);
+    BOOLEAN swapXY = IsRotationLandscape(rot) && (SrcW == h && SrcH == w);
     ULONG dstLimW = swapXY ? h : w;
     ULONG dstLimH = swapXY ? w : h;
     SIZE_T rowBytes;
@@ -993,15 +993,8 @@ NTSTATUS DispEnumCofuncModality(PDXGKRNL_INTERFACE Dxgk, const DXGKARG_ENUMVIDPN
                 sset = 0;
                 st = vi->pfnCreateNewSourceModeSet(A->hConstrainingVidPn, path->VidPnSourceId, &sset, &si);
                 if (NT_SUCCESS(st)) {
-                    if (IsRotationSupported(pathRot)) {
-                        st = IsRotationLandscape(pathRot) ? AddSourceMode(si, sset, V_ACTIVE, H_ACTIVE)
-                                                          : AddSourceMode(si, sset, H_ACTIVE, V_ACTIVE);
-                    } else {
-                        st = AddSourceMode(si, sset, H_ACTIVE, V_ACTIVE);
-                        if (NT_SUCCESS(st)) {
-                            st = AddSourceMode(si, sset, V_ACTIVE, H_ACTIVE);
-                        }
-                    }
+                    UNREFERENCED_PARAMETER(pathRot);
+                    st = AddSourceMode(si, sset, H_ACTIVE, V_ACTIVE);
                 }
                 if (NT_SUCCESS(st)) {
                     st = vi->pfnAssignSourceModeSet(A->hConstrainingVidPn, path->VidPnSourceId, sset);
@@ -1075,15 +1068,14 @@ NTSTATUS DispEnumCofuncModality(PDXGKRNL_INTERFACE Dxgk, const DXGKARG_ENUMVIDPN
         if (!(A->EnumPivotType == D3DKMDT_EPT_ROTATION && A->EnumPivot.VidPnSourceId == path->VidPnSourceId &&
               A->EnumPivot.VidPnTargetId == path->VidPnTargetId) &&
             path->ContentTransformation.Rotation == D3DKMDT_VPPR_UNPINNED) {
+            UNREFERENCED_PARAMETER(hasSpin);
+            UNREFERENCED_PARAMETER(spinW);
+            UNREFERENCED_PARAMETER(spinH);
             RtlZeroMemory(&local.ContentTransformation.RotationSupport, sizeof(local.ContentTransformation.RotationSupport));
-            if (!hasSpin || (spinW == H_ACTIVE && spinH == V_ACTIVE)) {
-                local.ContentTransformation.RotationSupport.Identity = 1;
-                local.ContentTransformation.RotationSupport.Rotate180 = 1;
-            }
-            if (!hasSpin || (spinW == V_ACTIVE && spinH == H_ACTIVE)) {
-                local.ContentTransformation.RotationSupport.Rotate90 = 1;
-                local.ContentTransformation.RotationSupport.Rotate270 = 1;
-            }
+            local.ContentTransformation.RotationSupport.Identity = 1;
+            local.ContentTransformation.RotationSupport.Rotate90 = 1;
+            local.ContentTransformation.RotationSupport.Rotate180 = 1;
+            local.ContentTransformation.RotationSupport.Rotate270 = 1;
             local.ContentTransformation.RotationSupport.Offset0 = 1;
             modified = TRUE;
         }
@@ -1188,11 +1180,10 @@ NTSTATUS DispIsSupportedVidPn(PDXGKRNL_INTERFACE Dxgk, DXGKARG_ISSUPPORTEDVIDPN 
                         (spin->Format.Graphics.PixelFormat != D3DDDIFMT_X8R8G8B8 &&
                          spin->Format.Graphics.PixelFormat != D3DDDIFMT_A8R8G8B8)) {
                         ok = FALSE;
-                    } else if (IsRotationSupported(rot)) {
-                        ok = IsRotationLandscape(rot) ? (w == V_ACTIVE && h == H_ACTIVE)
-                                                        : (w == H_ACTIVE && h == V_ACTIVE);
+                    } else if (rot == D3DKMDT_VPPR_UNPINNED || rot == D3DKMDT_VPPR_NOTSPECIFIED || IsRotationSupported(rot)) {
+                        ok = (w == H_ACTIVE && h == V_ACTIVE);
                     } else {
-                        ok = (w == H_ACTIVE && h == V_ACTIVE) || (w == V_ACTIVE && h == H_ACTIVE);
+                        ok = FALSE;
                     }
                 }
             }
