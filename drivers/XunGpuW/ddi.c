@@ -1197,6 +1197,7 @@ static NTSTATUS APIENTRY TgQueryVidPnHWCapability(const HANDLE hAdapter, DXGKARG
 {
     UNREFERENCED_PARAMETER(hAdapter);
     RtlZeroMemory(&A->VidPnHWCaps, sizeof(A->VidPnHWCaps));
+    A->VidPnHWCaps.DriverRotation = 1;
     return STATUS_SUCCESS;
 }
 
