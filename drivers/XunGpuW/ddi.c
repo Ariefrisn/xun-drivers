@@ -705,9 +705,10 @@ static NTSTATUS APIENTRY TgCreateAllocation(const HANDLE hAdapter, DXGKARG_CREAT
         ai->Flags.Value = 0;
         ai->Flags.CpuVisible = 1;
         if (++count <= 32 || d == NULL) {
-            LogPrint("CreateAllocation %p: kind %u %ux%u pitch %u fmt %u bo %u size %u pa %llx%s%s\n", al,
-                     al->Desc.kind, al->Desc.width, al->Desc.height, al->Desc.pitch, al->Desc.format,
-                     al->Desc.bo, (ULONG)al->Size, al->Bo != NULL ? al->Bo->ScanoutPa : 0ULL,
+            LogPrint("CreateAllocation %p: kind %u %ux%u pitch %u fmt %u bo %u bosize %u off %u size %u pa %llx%s%s\n",
+                     al, al->Desc.kind, al->Desc.width, al->Desc.height, al->Desc.pitch, al->Desc.format,
+                     al->Desc.bo, al->Bo != NULL ? (ULONG)al->Bo->Size : 0U, al->Desc.bo_offset,
+                     (ULONG)al->Size, al->Bo != NULL ? al->Bo->ScanoutPa : 0ULL,
                      (al->Desc.flags & XUNGPU_ALLOC_F_PRIMARY) ? " primary" : "", d == NULL ? " (no desc)" : "");
         }
     }

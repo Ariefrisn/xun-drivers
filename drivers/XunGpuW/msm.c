@@ -224,8 +224,9 @@ static NTSTATUS GemNew(struct drm_msm_gem_new *A)
     if (g_BoBytes > GEM_SOFT_LIMIT_BYTES) {
         BoShrink(0);
     }
-    preferContig = ((A->flags & MSM_BO_SCANOUT) != 0) ||
-                   (bo->Size >= 8800000 && bo->Size <= 10000000);
+    /* Only screen-sized BOs (>= ~8.4 MB, <= 32 MB) need <4 GB contiguous scanout backing;
+       ignoring MSM_BO_SCANOUT on small buffers prevents exhausting the contiguous scanout budget. */
+    preferContig = (bo->Size >= 8800000 && bo->Size <= 33554432);
     bo->Mdl = TgAllocPages(bo->Size, preferContig, &bo->Iova, &bo->ScanoutPa, &bo->KernelVa, &bo->Contig);
     if (bo->Mdl == NULL) {
         SIZE_T reclaimed = BoShrink(bo->Size);
@@ -261,6 +262,14 @@ static NTSTATUS GemNew(struct drm_msm_gem_new *A)
     InsertTailList(&g_Bos, &bo->Link);
     g_BoCount++;
     g_BoBytes += bo->Size;
+    if (bo->Size >= 8800000) {
+        static ULONG largeLogCount;
+        if (++largeLogCount <= 24) {
+            LogPrint("GEM_NEW large bo %u: req %llu size %llu flags %x pref %u pa %llx contig %u\n",
+                     h, (ULONGLONG)A->size, (ULONGLONG)bo->Size, A->flags, preferContig ? 1 : 0,
+                     bo->ScanoutPa, bo->Contig ? 1 : 0);
+        }
+    }
     A->handle = h;
     return STATUS_SUCCESS;
 }

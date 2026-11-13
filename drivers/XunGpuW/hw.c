@@ -733,7 +733,7 @@ VOID VaFree(ULONGLONG Va, SIZE_T Size)
 
 #define SCANOUT_POOL_SLOTS       8
 #define SCANOUT_POOL_SLOT_SIZE   (10ULL * 1024 * 1024)
-#define MAX_CONTIG_SCANOUT_BYTES ((SIZE_T)SCANOUT_POOL_SLOTS * SCANOUT_POOL_SLOT_SIZE)
+#define MAX_CONTIG_SCANOUT_BYTES (128ULL * 1024 * 1024)
 
 typedef struct _SCANOUT_SLOT {
     PVOID     Va;
@@ -918,13 +918,18 @@ PMDL TgAllocPages(SIZE_T Size, BOOLEAN PreferContig, PULONGLONG Iova, PULONGLONG
     if (PreferContig && g_ContigScanoutBytes + Size <= MAX_CONTIG_SCANOUT_BYTES) {
         ULONGLONG pa = 0;
         PVOID va = NULL;
+        NTSTATUS mmuSt = STATUS_UNSUCCESSFUL;
+        ULONGLONG iova = 0;
         mdl = TgScanoutPoolAcquire(Size, &pa, &va);
         if (mdl == NULL) {
             mdl = TgAllocContig(Size, &pa, &va);
         }
         if (mdl != NULL) {
-            ULONGLONG iova = VaAlloc(Size + PAGE_SIZE);
-            if (iova != 0 && NT_SUCCESS(MmuMap(iova, mdl, Size))) {
+            iova = VaAlloc(Size + PAGE_SIZE);
+            if (iova != 0) {
+                mmuSt = MmuMap(iova, mdl, Size);
+            }
+            if (iova != 0 && NT_SUCCESS(mmuSt)) {
                 *Iova = iova;
                 *ScanoutPa = pa;
                 *KernelVa = va;
@@ -940,6 +945,11 @@ PMDL TgAllocPages(SIZE_T Size, BOOLEAN PreferContig, PULONGLONG Iova, PULONGLONG
                 TgFreeContig(mdl, va, Size);
             }
         }
+        LogPrint("TgAllocPages: contig fallback size=%llu poolBytes=%llu mdl=%p iova=%llx mmu=%08x\n",
+                 (ULONGLONG)Size, (ULONGLONG)g_ContigScanoutBytes, mdl, iova, mmuSt);
+    } else if (PreferContig) {
+        LogPrint("TgAllocPages: contig budget exceeded size=%llu poolBytes=%llu max=%llu\n",
+                 (ULONGLONG)Size, (ULONGLONG)g_ContigScanoutBytes, (ULONGLONG)MAX_CONTIG_SCANOUT_BYTES);
     }
 
     lo.QuadPart = 0;
