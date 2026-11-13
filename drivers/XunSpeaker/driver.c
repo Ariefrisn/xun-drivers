@@ -40,6 +40,8 @@ static VOID SpkEvtDriverUnload(WDFDRIVER Driver)
     LogClose();
 }
 
+static volatile LONG g_SpkDeviceAdded = 0;
+
 static NTSTATUS SpkEvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
 {
     ACX_DEVICEINIT_CONFIG initCfg;
@@ -52,6 +54,10 @@ static NTSTATUS SpkEvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
     NTSTATUS status;
 
     UNREFERENCED_PARAMETER(Driver);
+    if (InterlockedCompareExchange(&g_SpkDeviceAdded, 1, 0) != 0) {
+        LogPrint("duplicate speaker device node detected, rejecting\r\n");
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
     ACX_DEVICEINIT_CONFIG_INIT(&initCfg);
     status = AcxDeviceInitInitialize(DeviceInit, &initCfg);
     if (!NT_SUCCESS(status)) {
