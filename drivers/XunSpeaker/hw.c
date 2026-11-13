@@ -122,8 +122,9 @@ static VOID ApplyVolume(VOID)
     LONG db = g_Mute ? -84 : g_VolDb;
 
     if (g_CodecUp) {
-        TaWr(RX_MACRO + 0x414, (ULONG)db & 0xFF);   /* RX_RX0_RX_VOL_CTL, s8 dB (Right / EAR) */
-        TaWr(RX_MACRO + 0x514, (ULONG)db & 0xFF);   /* RX_RX2_RX_VOL_CTL, s8 dB (Left / AUX) */
+        TaWr(RX_MACRO + 0x414, (ULONG)db & 0xFF);   /* RX_RX0_RX_VOL_CTL, s8 dB (HPHL / EAR) */
+        TaWr(RX_MACRO + 0x494, (ULONG)db & 0xFF);   /* RX_RX1_RX_VOL_CTL, s8 dB (HPHR) */
+        TaWr(RX_MACRO + 0x514, (ULONG)db & 0xFF);   /* RX_RX2_RX_VOL_CTL, s8 dB (AUX) */
     }
 }
 
@@ -243,7 +244,8 @@ static VOID PortsAndPa(VOID)
     TaSleep(5);
     SwrWr(VA_SWR, 1, 0x3467, 0x05);
     SwrWr(VA_SWR, 1, 0x3128, 0x80);
-    SwrWr(VA_SWR, 1, 0x300B, 0x92);                 /* WCD937X_ANA_EAR: EAR PA enable (Right speakers) */
+    SwrWr(VA_SWR, 1, 0x3009, 0xCC);                 /* WCD937X_ANA_HPH: HPHL + HPHR PA enable (xun.dts HPHL/R) */
+    SwrWr(VA_SWR, 1, 0x300B, 0x92);                 /* WCD937X_ANA_EAR: EAR PA enable */
     SwrWr(VA_SWR, 1, 0x346B, 0x4C);
     SwrWr(VA_SWR, 1, 0x346C, 0x7F);
     SwrWr(VA_SWR, 1, 0x346D, 0x0F);
@@ -400,9 +402,6 @@ static VOID AmpOn(BOOLEAN On)
             if (!g_AmpInit) {
                 status = Fs1815InitOne(fsAddrs[k]);
             }
-            (VOID)TaI2cWrite16(fsAddrs[k], 0x1F, 0xCA91);
-            (VOID)TaI2cWrite16(fsAddrs[k], 0xBC, 0x9433);
-            (VOID)TaI2cWrite16(fsAddrs[k], 0x1F, 0x0000);
             (VOID)TaI2cWrite16(fsAddrs[k], 0x11, 0x008F);   /* Boost/PLL/Class-D enable */
             status = TaI2cWrite16(fsAddrs[k], 0x10, 0x0000);/* Power UP / unmute */
             (VOID)TaI2cWrite16(fsAddrs[k], 0x06, 0xFF00);   /* 0 dB volume */
@@ -548,9 +547,11 @@ NTSTATUS HwStreamRun(WDFDEVICE Device)
         AmpOn(TRUE);
         ApplyVolume();
         TaWr(RX_MACRO + 0x418, 0x04);
-        TaWr(RX_MACRO + 0x400, 0x24);                   /* RX0 path on (Right / EAR) */
+        TaWr(RX_MACRO + 0x400, 0x24);                   /* RX0 path on (HPHL / EAR) */
+        TaWr(RX_MACRO + 0x498, 0x04);
+        TaWr(RX_MACRO + 0x480, 0x24);                   /* RX1 path on (HPHR) */
         TaWr(RX_MACRO + 0x518, 0x04);
-        TaWr(RX_MACRO + 0x500, 0x24);                   /* RX2 path on (Left / AUX) */
+        TaWr(RX_MACRO + 0x500, 0x24);                   /* RX2 path on (AUX) */
         g_Running = TRUE;
     }
     LogPrint("hw run: %08x\r\n", status);
@@ -566,6 +567,7 @@ NTSTATUS HwStreamPause(WDFDEVICE Device)
     g_Running = FALSE;
     AmpOn(FALSE);
     TaWr(RX_MACRO + 0x400, 0x04);
+    TaWr(RX_MACRO + 0x480, 0x04);
     TaWr(RX_MACRO + 0x500, 0x04);
     (VOID)SgCmd(APM_GRAPH_STOP);
     g_Stopped = TRUE;

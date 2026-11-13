@@ -731,7 +731,20 @@ VOID VaFree(ULONGLONG Va, SIZE_T Size)
 
 /* ---------------------------------------------------------------- kernel buffers */
 
-#define MAX_CONTIG_SCANOUT_BYTES (48ULL * 1024 * 1024)
+#define SCANOUT_POOL_SLOTS       8
+#define SCANOUT_POOL_SLOT_SIZE   (10ULL * 1024 * 1024)
+#define MAX_CONTIG_SCANOUT_BYTES ((SIZE_T)SCANOUT_POOL_SLOTS * SCANOUT_POOL_SLOT_SIZE)
+
+typedef struct _SCANOUT_SLOT {
+    PVOID     Va;
+    ULONGLONG Pa;
+    BOOLEAN   Allocated;
+    BOOLEAN   InUse;
+} SCANOUT_SLOT;
+
+static SCANOUT_SLOT g_ScanoutPool[SCANOUT_POOL_SLOTS];
+static KSPIN_LOCK   g_ScanoutPoolLock;
+static BOOLEAN      g_ScanoutPoolLockInit;
 
 static PMDL TgAllocContig(SIZE_T Size, PULONGLONG Pa, PVOID *KernelVa)
 {
@@ -764,6 +777,114 @@ static VOID TgFreeContig(PMDL Mdl, PVOID KernelVa, SIZE_T Size)
     MmFreeContiguousMemorySpecifyCache(KernelVa, Size, MmWriteCombined);
 }
 
+VOID TgScanoutPoolInit(VOID)
+{
+    PHYSICAL_ADDRESS lo, hi, bound;
+    ULONG i, ok = 0;
+
+    if (!g_ScanoutPoolLockInit) {
+        KeInitializeSpinLock(&g_ScanoutPoolLock);
+        g_ScanoutPoolLockInit = TRUE;
+    }
+    lo.QuadPart = 0;
+    hi.QuadPart = 0xFFFFFFFF;
+    bound.QuadPart = 0;
+    for (i = 0; i < SCANOUT_POOL_SLOTS; i++) {
+        PVOID va;
+        if (g_ScanoutPool[i].Allocated) {
+            ok++;
+            continue;
+        }
+        va = MmAllocateContiguousMemorySpecifyCache(SCANOUT_POOL_SLOT_SIZE, lo, hi, bound, MmWriteCombined);
+        if (va == NULL) {
+            break;
+        }
+        RtlZeroMemory(va, SCANOUT_POOL_SLOT_SIZE);
+        g_ScanoutPool[i].Va = va;
+        g_ScanoutPool[i].Pa = (ULONGLONG)MmGetPhysicalAddress(va).QuadPart;
+        g_ScanoutPool[i].Allocated = TRUE;
+        g_ScanoutPool[i].InUse = FALSE;
+        ok++;
+    }
+    LogPrint("ScanoutPool: %u/%u contiguous slots (%u MB <4GB)\n", ok, SCANOUT_POOL_SLOTS,
+             ok * (ULONG)(SCANOUT_POOL_SLOT_SIZE / (1024 * 1024)));
+}
+
+VOID TgScanoutPoolFree(VOID)
+{
+    ULONG i;
+
+    for (i = 0; i < SCANOUT_POOL_SLOTS; i++) {
+        if (g_ScanoutPool[i].Allocated) {
+            if (g_ScanoutPool[i].InUse) {
+                LogPrint("ScanoutPool: warning slot %u still in use during free\n", i);
+                continue;
+            }
+            MmFreeContiguousMemorySpecifyCache(g_ScanoutPool[i].Va, SCANOUT_POOL_SLOT_SIZE, MmWriteCombined);
+            RtlZeroMemory(&g_ScanoutPool[i], sizeof(g_ScanoutPool[i]));
+        }
+    }
+}
+
+static PMDL TgScanoutPoolAcquire(SIZE_T Size, PULONGLONG Pa, PVOID *KernelVa)
+{
+    KIRQL irql;
+    ULONG i;
+    PVOID va = NULL;
+    ULONGLONG pa = 0;
+    PMDL mdl;
+
+    if (!g_ScanoutPoolLockInit || Size < (1024ULL * 1024) || Size > SCANOUT_POOL_SLOT_SIZE) {
+        return NULL;
+    }
+    KeAcquireSpinLock(&g_ScanoutPoolLock, &irql);
+    for (i = 0; i < SCANOUT_POOL_SLOTS; i++) {
+        if (g_ScanoutPool[i].Allocated && !g_ScanoutPool[i].InUse) {
+            g_ScanoutPool[i].InUse = TRUE;
+            va = g_ScanoutPool[i].Va;
+            pa = g_ScanoutPool[i].Pa;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&g_ScanoutPoolLock, irql);
+    if (va == NULL) {
+        return NULL;
+    }
+    mdl = IoAllocateMdl(va, (ULONG)Size, FALSE, FALSE, NULL);
+    if (mdl == NULL) {
+        KeAcquireSpinLock(&g_ScanoutPoolLock, &irql);
+        g_ScanoutPool[i].InUse = FALSE;
+        KeReleaseSpinLock(&g_ScanoutPoolLock, irql);
+        return NULL;
+    }
+    MmBuildMdlForNonPagedPool(mdl);
+    RtlZeroMemory(va, Size);
+    *KernelVa = va;
+    *Pa = pa;
+    return mdl;
+}
+
+static BOOLEAN TgScanoutPoolRelease(PMDL Mdl, PVOID KernelVa)
+{
+    KIRQL irql;
+    ULONG i;
+
+    if (!g_ScanoutPoolLockInit || KernelVa == NULL) {
+        return FALSE;
+    }
+    KeAcquireSpinLock(&g_ScanoutPoolLock, &irql);
+    for (i = 0; i < SCANOUT_POOL_SLOTS; i++) {
+        if (g_ScanoutPool[i].Allocated && g_ScanoutPool[i].Va == KernelVa) {
+            g_ScanoutPool[i].InUse = FALSE;
+            KeReleaseSpinLock(&g_ScanoutPoolLock, irql);
+            IoFreeMdl(Mdl);
+            return TRUE;
+        }
+    }
+    KeReleaseSpinLock(&g_ScanoutPoolLock, irql);
+    return FALSE;
+}
+
 /* GPU-visible pages: stage-1 SMMU scatters normal BOs across <64 GB RAM; optional contiguous <4 GB for scanout/identity */
 PMDL TgAllocPages(SIZE_T Size, BOOLEAN PreferContig, PULONGLONG Iova, PULONGLONG ScanoutPa,
                   PVOID *KernelVa, PBOOLEAN IsContig)
@@ -779,12 +900,17 @@ PMDL TgAllocPages(SIZE_T Size, BOOLEAN PreferContig, PULONGLONG Iova, PULONGLONG
 
     if (!g_UseSmmu) {
         ULONGLONG pa = 0;
-        mdl = TgAllocContig(Size, &pa, KernelVa);
+        PVOID va = NULL;
+        mdl = TgScanoutPoolAcquire(Size, &pa, &va);
+        if (mdl == NULL) {
+            mdl = TgAllocContig(Size, &pa, &va);
+        }
         if (mdl == NULL) {
             return NULL;
         }
         *Iova = pa;
         *ScanoutPa = pa;
+        *KernelVa = va;
         *IsContig = TRUE;
         return mdl;
     }
@@ -792,7 +918,10 @@ PMDL TgAllocPages(SIZE_T Size, BOOLEAN PreferContig, PULONGLONG Iova, PULONGLONG
     if (PreferContig && g_ContigScanoutBytes + Size <= MAX_CONTIG_SCANOUT_BYTES) {
         ULONGLONG pa = 0;
         PVOID va = NULL;
-        mdl = TgAllocContig(Size, &pa, &va);
+        mdl = TgScanoutPoolAcquire(Size, &pa, &va);
+        if (mdl == NULL) {
+            mdl = TgAllocContig(Size, &pa, &va);
+        }
         if (mdl != NULL) {
             ULONGLONG iova = VaAlloc(Size + PAGE_SIZE);
             if (iova != 0 && NT_SUCCESS(MmuMap(iova, mdl, Size))) {
@@ -807,7 +936,9 @@ PMDL TgAllocPages(SIZE_T Size, BOOLEAN PreferContig, PULONGLONG Iova, PULONGLONG
                 MmuUnmap(iova, Size);
                 VaFree(iova, Size + PAGE_SIZE);
             }
-            TgFreeContig(mdl, va, Size);
+            if (!TgScanoutPoolRelease(mdl, va)) {
+                TgFreeContig(mdl, va, Size);
+            }
         }
     }
 
@@ -843,7 +974,9 @@ VOID TgFreePages(PMDL Mdl, PVOID KernelVa, SIZE_T Size, ULONGLONG Iova, BOOLEAN 
         if (g_UseSmmu) {
             g_ContigScanoutBytes = (g_ContigScanoutBytes >= Size) ? (g_ContigScanoutBytes - Size) : 0;
         }
-        TgFreeContig(Mdl, KernelVa, Size);
+        if (!TgScanoutPoolRelease(Mdl, KernelVa)) {
+            TgFreeContig(Mdl, KernelVa, Size);
+        }
         return;
     }
     if (KernelVa != NULL) {

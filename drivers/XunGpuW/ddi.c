@@ -236,6 +236,7 @@ static NTSTATUS TgStartDevice(const PVOID Ctx, PDXGK_START_INFO StartInfo, PDXGK
             }
         }
     }
+    TgScanoutPoolInit();
     if (!NT_SUCCESS(EngStart(FenceDone, a))) {
         LogPrint("StartDevice: engine thread failed\n");
         return STATUS_UNSUCCESSFUL;
@@ -258,6 +259,7 @@ static NTSTATUS TgStopDevice(const PVOID Ctx)
     GuardStop();
     MsmCleanup();
     HwStop();
+    TgScanoutPoolFree();
     return STATUS_SUCCESS;
 }
 
@@ -309,6 +311,7 @@ static VOID TgResetDevice(const PVOID Ctx)
 
 static VOID TgUnload(VOID)
 {
+    TgScanoutPoolFree();
     GuardStop();
     LogClose();
 }
@@ -702,8 +705,9 @@ static NTSTATUS APIENTRY TgCreateAllocation(const HANDLE hAdapter, DXGKARG_CREAT
         ai->Flags.Value = 0;
         ai->Flags.CpuVisible = 1;
         if (++count <= 32 || d == NULL) {
-            LogPrint("CreateAllocation %p: kind %u %ux%u pitch %u fmt %u bo %u size %u%s%s\n", al, al->Desc.kind,
-                     al->Desc.width, al->Desc.height, al->Desc.pitch, al->Desc.format, al->Desc.bo, (ULONG)al->Size,
+            LogPrint("CreateAllocation %p: kind %u %ux%u pitch %u fmt %u bo %u size %u pa %llx%s%s\n", al,
+                     al->Desc.kind, al->Desc.width, al->Desc.height, al->Desc.pitch, al->Desc.format,
+                     al->Desc.bo, (ULONG)al->Size, al->Bo != NULL ? al->Bo->ScanoutPa : 0ULL,
                      (al->Desc.flags & XUNGPU_ALLOC_F_PRIMARY) ? " primary" : "", d == NULL ? " (no desc)" : "");
         }
     }

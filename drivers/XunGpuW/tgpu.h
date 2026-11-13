@@ -19,7 +19,7 @@
 #include "msm_drm_k.h"
 #include "xungpu_escape.h"
 
-#define TGPU_VERSION        "v0.46.2"
+#define TGPU_VERSION        "v0.46.3"
 #define TGPU_POOL_TAG       'WupG'
 
 /* ---- log.c ---- */
@@ -59,6 +59,8 @@ BOOLEAN   HwStart(VOID);
 VOID      HwStop(VOID);
 BOOLEAN   HwReady(VOID);
 BOOLEAN   HwUsingSmmu(VOID);
+VOID      TgScanoutPoolInit(VOID);
+VOID      TgScanoutPoolFree(VOID);
 PMDL      TgAllocPages(SIZE_T Size, BOOLEAN PreferContig, PULONGLONG Iova, PULONGLONG ScanoutPa,
                        PVOID *KernelVa, PBOOLEAN IsContig);
 VOID      TgFreePages(PMDL Mdl, PVOID KernelVa, SIZE_T Size, ULONGLONG Iova, BOOLEAN IsContig);

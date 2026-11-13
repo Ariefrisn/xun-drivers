@@ -224,7 +224,8 @@ static NTSTATUS GemNew(struct drm_msm_gem_new *A)
     if (g_BoBytes > GEM_SOFT_LIMIT_BYTES) {
         BoShrink(0);
     }
-    preferContig = (bo->Size >= 8800000 && bo->Size <= 10000000);
+    preferContig = ((A->flags & MSM_BO_SCANOUT) != 0) ||
+                   (bo->Size >= 8800000 && bo->Size <= 10000000);
     bo->Mdl = TgAllocPages(bo->Size, preferContig, &bo->Iova, &bo->ScanoutPa, &bo->KernelVa, &bo->Contig);
     if (bo->Mdl == NULL) {
         SIZE_T reclaimed = BoShrink(bo->Size);

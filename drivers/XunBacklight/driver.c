@@ -14,7 +14,7 @@
 #include "driver.h"
 #include "xun_ktz8866.h"
 
-#define XUN_BL_VERSION       "v0.7"
+#define XUN_BL_VERSION       "v0.8"
 
 static LONG g_DeviceCount = 0;
 
@@ -263,16 +263,21 @@ static VOID PollThread(PVOID Context)
     LARGE_INTEGER period;
 
     period.QuadPart = -10000LL * POLL_MS;
-    LogPrint("poll thread started (C:\\xun\\brightness)\n");
+    if (!FileExists(L"\\??\\C:\\xun\\bl.manual") &&
+        FileExists(L"\\??\\C:\\Windows\\System32\\drivers\\XunGpuW.sys")) {
+        LogPrint("XunGpuW owns panel brightness cleanly; XunBacklight yielding (create C:\\xun\\bl.manual to override)\n");
+    } else {
+        LogPrint("poll thread started (C:\\xun\\brightness)\n");
 
-    while (KeWaitForSingleObject(&C->StopEvent, Executive, KernelMode, FALSE, &period) == STATUS_TIMEOUT) {
-        LONG pct = ReadPercent();
-        if (pct < 0) {
-            pct = 80; /* default fallback 80% if C:\xun\brightness missing or unreadable */
-        }
-        if (pct >= 0 && pct != C->LastPct) {
-            if (SetLevel(C, pct)) {
-                C->LastPct = pct;
+        while (KeWaitForSingleObject(&C->StopEvent, Executive, KernelMode, FALSE, &period) == STATUS_TIMEOUT) {
+            LONG pct = ReadPercent();
+            if (pct < 0) {
+                pct = 80; /* default fallback 80% if C:\xun\brightness missing or unreadable */
+            }
+            if (pct >= 0 && pct != C->LastPct) {
+                if (SetLevel(C, pct)) {
+                    C->LastPct = pct;
+                }
             }
         }
     }
