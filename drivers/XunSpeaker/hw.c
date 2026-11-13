@@ -186,6 +186,7 @@ static NTSTATUS CodecBringUp(VOID)
     for (i = 0; i < ARRAYSIZE(g_RxStock); i++) {
         TaWr(RX_MACRO + g_RxStock[i][0], g_RxStock[i][1]);
     }
+    TaWr(RX_MACRO + 0x404, 0x08);                    /* RX INT0 DEM MUX = CLSH_DSM_OUT (EAR path) */
     TaWr(RX_MACRO + 0x400, 4); TaWr(RX_MACRO + 0x480, 4); TaWr(RX_MACRO + 0x500, 4);
     /* 9. WCD937x init + RX clocks + AUX DAC (Left) + EAR DAC (Right) (TX slave on VA bus, dev 1) */
     SwrWr(VA_SWR, 1, 0x3103, 0xD6); TaSleep(2);
@@ -200,9 +201,11 @@ static NTSTATUS CodecBringUp(VOID)
     SwrWr(VA_SWR, 1, 0x3408, 0x03);
     SwrWr(VA_SWR, 1, 0x3408, 0x07); SwrWr(VA_SWR, 1, 0x3409, 0x0D); SwrWr(VA_SWR, 1, 0x344F, 0x01);
     SwrWr(VA_SWR, 1, 0x344E, 0x04); SwrWr(VA_SWR, 1, 0x3133, 0x02); SwrWr(VA_SWR, 1, 0x3414, 0x02);
-    SwrWr(VA_SWR, 1, 0x3450, 0x01);                 /* RDAC3_MUX = RX1 (for EAR_OUT Left speakers) */
-    SwrWr(VA_SWR, 1, 0x340B, 0x95);                 /* AUX PATH Mode = HP_MODE (bit 6 set on 0x55 default) */
-    SwrWr(VA_SWR, 1, 0x30A4, 0x04); SwrWr(VA_SWR, 1, 0x3465, 0x13);
+    TaSleep(5);
+    SwrWr(VA_SWR, 1, 0x30A4, 0x00);                 /* ear_dac_event PRE_PMU clears bit 2 (0x04 = power-down) */
+    SwrWr(VA_SWR, 1, 0x3450, 0x01);                 /* RDAC3_MUX = RX1 */
+    SwrWr(VA_SWR, 1, 0x340B, 0x95);                 /* AUX PATH Mode = HP_MODE (bit 6 = 0) */
+    SwrWr(VA_SWR, 1, 0x3465, 0x13);
     SwrWr(VA_SWR, 1, 0x3009, 0x0C); SwrWr(VA_SWR, 1, 0x300A, 0x40); SwrWr(VA_SWR, 1, 0x300B, 0x12);
     SwrWr(VA_SWR, 1, 0x3008, 0x41); SwrWr(VA_SWR, 1, 0x3008, 0xC1);
     g_CodecUp = TRUE;
@@ -250,21 +253,53 @@ static VOID PortsAndPa(VOID)
     TaWr(RX_SWR + 0x300, (0x0Fu << 24) | (15u << 20) | (15u << 16) | 0x70);   /* broadcast bank switch */
     TaSleep(5);
     SwrWr(VA_SWR, 1, 0x3467, 0x05);
-    SwrWr(VA_SWR, 1, 0x3128, 0x90);                 /* AUX PATH Mode = HP_MODE (bit 4) + bit 7 */
+    SwrWr(VA_SWR, 1, 0x3128, 0x80);                 /* AUX PGA enable (bit 7), AUX PATH Mode = HP_MODE (bit 4 = 0) */
     SwrWr(VA_SWR, 1, 0x3008, 0xC3);                 /* RX_CTRL_0: HPH + EAR class-H / bias enable */
-    SwrWr(VA_SWR, 1, 0x3009, 0xCC);                 /* WCD937X_ANA_HPH: HPHL + HPHR PA enable (xun.dts HPHL/R) */
-    SwrWr(VA_SWR, 1, 0x300B, 0x92);                 /* WCD937X_ANA_EAR: EAR PA enable (G_0_DB) */
+    SwrWr(VA_SWR, 1, 0x3009, 0xCC);                 /* WCD937X_ANA_HPH: HPHL + HPHR PA enable */
+    SwrWr(VA_SWR, 1, 0x300B, 0x92);                 /* WCD937X_ANA_EAR: PRE_PMU bit 7 + G_0_DB */
+    SwrWr(VA_SWR, 1, 0x300A, 0xC0);                 /* EAR PGA widget enable (bit 7 = 0x80 per wcd937x_dlkm) */
+    TaSleep(6);                                     /* ear_pa POST_PMU 6ms settle */
     SwrWr(VA_SWR, 1, 0x346B, 0x4C);
     SwrWr(VA_SWR, 1, 0x346C, 0x7F);
     SwrWr(VA_SWR, 1, 0x346D, 0x0F);
     LogPrint("ports: rx frame b1 %08x, irq %08x\r\n", TaRd(RX_SWR + 0x105C), TaRd(RX_SWR + 0x200));
 }
 
+static const UCHAR g_FsAddrs[4] = { 0x34, 0x35, 0x80 | 0x34, 0x80 | 0x35 };
 static BOOLEAN g_AmpInit;
 static BOOLEAN g_AmpProbed;
 static UCHAR   g_SipaMaskSe1;              /* bitmask of active 0x28/0x29/0x2B on SE1 */
 static UCHAR   g_FsMask;                   /* bitmask of 0x34/0x35 on SE1 (bits 0..1) and SE2 (bits 2..3) */
 static USHORT  g_FsDevId[4];
+
+static VOID Fs1815DumpRegs(PCSTR Stage)
+{
+    ULONG k;
+
+    for (k = 0; k < ARRAYSIZE(g_FsAddrs); k++) {
+        USHORT r0 = 0xFFFF, r1 = 0xFFFF, r2 = 0xFFFF, r6 = 0xFFFF;
+        USHORT r10 = 0xFFFF, r11 = 0xFFFF, r14 = 0xFFFF, r16 = 0xFFFF;
+        USHORT r18 = 0xFFFF, r19 = 0xFFFF, r20 = 0xFFFF, rbc = 0xFFFF;
+
+        if (!(g_FsMask & (1u << k))) {
+            continue;
+        }
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x00, &r0);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x01, &r1);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x02, &r2);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x06, &r6);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x10, &r10);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x11, &r11);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x14, &r14);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x16, &r16);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x18, &r18);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x19, &r19);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x20, &r20);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0xBC, &rbc);
+        LogPrint("  fs1815[%s] %02x: st=%04x id=%04x/%04x pwr=%04x sys=%04x fmt=%04x ch=%04x vol=%04x/%04x r18=%04x r20=%04x bc=%04x\r\n",
+                 Stage, g_FsAddrs[k], r0, r1, r2, r10, r11, r14, r19, r6, r16, r18, r20, rbc);
+    }
+}
 
 static NTSTATUS Fs1815UpdateBits(UCHAR Addr, UCHAR Reg, UCHAR Shift, UCHAR Len, USHORT Val)
 {
@@ -349,7 +384,6 @@ static VOID AmpOn(BOOLEAN On)
     static const UCHAR sipaRegs[][2] = { { 1, 0x7c }, { 2, 0x21 }, { 5, 0x01 }, { 3, 0x30 }, { 4, 0xc5 },
                                          { 6, 0x48 }, { 7, 0x5d }, { 8, 0x8a }, { 9, 0x0e }, { 10, 0xa4 } };
     static const UCHAR sipaAddrs[3] = { 0x28, 0x29, 0x2B };
-    static const UCHAR fsAddrs[4] = { 0x34, 0x35, 0x80 | 0x34, 0x80 | 0x35 };
     ULONG i, k;
     NTSTATUS status = STATUS_SUCCESS;
 
@@ -372,16 +406,16 @@ static VOID AmpOn(BOOLEAN On)
                 LogPrint("amp detect SE1 sipa@0x%02x reg00=%02x\r\n", sipaAddrs[k], buf[0]);
             }
         }
-        for (k = 0; k < ARRAYSIZE(fsAddrs); k++) {
+        for (k = 0; k < ARRAYSIZE(g_FsAddrs); k++) {
             USHORT reg01 = 0, devId = 0, revId = 0;
-            if (NT_SUCCESS(TaI2cRead16(fsAddrs[k], 0x03, &revId)) ||
-                NT_SUCCESS(TaI2cRead16(fsAddrs[k], 0x02, &devId))) {
-                (VOID)TaI2cRead16(fsAddrs[k], 0x01, &reg01);
-                (VOID)TaI2cRead16(fsAddrs[k], 0x02, &devId);
+            if (NT_SUCCESS(TaI2cRead16(g_FsAddrs[k], 0x03, &revId)) ||
+                NT_SUCCESS(TaI2cRead16(g_FsAddrs[k], 0x02, &devId))) {
+                (VOID)TaI2cRead16(g_FsAddrs[k], 0x01, &reg01);
+                (VOID)TaI2cRead16(g_FsAddrs[k], 0x02, &devId);
                 g_FsMask |= (UCHAR)(1u << k);
                 g_FsDevId[k] = devId;
                 LogPrint("amp detect SE%u fs1815@0x%02x reg01=%04x id=%04x rev=%04x\r\n",
-                         (fsAddrs[k] & 0x80u) ? 2u : 1u, fsAddrs[k] & 0x7Fu, reg01, devId, revId);
+                         (g_FsAddrs[k] & 0x80u) ? 2u : 1u, g_FsAddrs[k] & 0x7Fu, reg01, devId, revId);
             }
         }
         if (g_SipaMaskSe1 == 0 && g_FsMask == 0) {
@@ -402,35 +436,30 @@ static VOID AmpOn(BOOLEAN On)
             status = TaI2cWrite(sipaAddrs[k], 5, On ? 1 : 0);
         }
     }
-    for (k = 0; k < ARRAYSIZE(fsAddrs); k++) {
+    for (k = 0; k < ARRAYSIZE(g_FsAddrs); k++) {
         if (!(g_FsMask & (1u << k))) {
             continue;
         }
         if (On) {
             if (!g_AmpInit) {
-                status = Fs1815InitOne(fsAddrs[k]);
+                status = Fs1815InitOne(g_FsAddrs[k]);
             }
-            (VOID)TaI2cWrite16(fsAddrs[k], 0x11, 0x008F);   /* Boost/PLL/Class-D enable */
-            status = TaI2cWrite16(fsAddrs[k], 0x10, 0x0000);/* Power UP / unmute */
-            (VOID)TaI2cWrite16(fsAddrs[k], 0x06, 0xFF00);   /* 0 dB volume */
-            {
-                USHORT r0 = 0xFFFF, r1 = 0xFFFF, r10 = 0xFFFF, r11 = 0xFFFF, r14 = 0xFFFF, r19 = 0xFFFF;
-                (VOID)TaI2cRead16(fsAddrs[k], 0x00, &r0);
-                (VOID)TaI2cRead16(fsAddrs[k], 0x01, &r1);
-                (VOID)TaI2cRead16(fsAddrs[k], 0x10, &r10);
-                (VOID)TaI2cRead16(fsAddrs[k], 0x11, &r11);
-                (VOID)TaI2cRead16(fsAddrs[k], 0x14, &r14);
-                (VOID)TaI2cRead16(fsAddrs[k], 0x19, &r19);
-                LogPrint("  fs1815 %02x: st=%04x id=%04x pwr=%04x sys=%04x fmt=%04x ch=%04x\r\n",
-                         fsAddrs[k], r0, r1, r10, r11, r14, r19);
+            if (g_FsDevId[k] == 0x0011u) {
+                (VOID)TaI2cWrite16(g_FsAddrs[k], 0x1F, 0xCA91);
+                (VOID)TaI2cWrite16(g_FsAddrs[k], 0xBC, 0x9433); /* fs1815_start_up dev_id==0x11 */
+                (VOID)TaI2cWrite16(g_FsAddrs[k], 0x1F, 0x0000);
             }
+            (VOID)TaI2cWrite16(g_FsAddrs[k], 0x11, 0x008F);     /* Boost/PLL/Class-D enable */
+            status = TaI2cWrite16(g_FsAddrs[k], 0x10, 0x0000);  /* Power UP / unmute */
+            (VOID)TaI2cWrite16(g_FsAddrs[k], 0x06, 0xFF00);     /* 0 dB volume */
         } else {
-            status = TaI2cWrite16(fsAddrs[k], 0x10, 0x0001);/* Power down */
-            (VOID)TaI2cWrite16(fsAddrs[k], 0x11, 0x0000);   /* Boost off */
+            status = TaI2cWrite16(g_FsAddrs[k], 0x10, 0x0001);  /* Power down */
+            (VOID)TaI2cWrite16(g_FsAddrs[k], 0x11, 0x0000);     /* Boost off */
         }
     }
     if (On && g_FsMask != 0) {
         TaSleep(10);
+        Fs1815DumpRegs("amp post");
     }
     if (On && !g_AmpInit && NT_SUCCESS(status)) {
         g_AmpInit = TRUE;
@@ -555,11 +584,14 @@ NTSTATUS HwStreamRun(WDFDEVICE Device)
         AmpOn(TRUE);
         ApplyVolume();
         TaWr(RX_MACRO + 0x418, 0x04);
-        TaWr(RX_MACRO + 0x400, 0x24);                   /* RX0 path on (HPHL / EAR) */
+        TaWr(RX_MACRO + 0x400, 0x34);                   /* RX0 path + interp clk on (HPHL / EAR) */
         TaWr(RX_MACRO + 0x498, 0x04);
-        TaWr(RX_MACRO + 0x480, 0x24);                   /* RX1 path on (HPHR) */
+        TaWr(RX_MACRO + 0x480, 0x34);                   /* RX1 path + interp clk on (HPHR) */
         TaWr(RX_MACRO + 0x518, 0x04);
-        TaWr(RX_MACRO + 0x500, 0x24);                   /* RX2 path on (AUX) */
+        TaWr(RX_MACRO + 0x500, 0x34);                   /* RX2 path + interp clk on (AUX) */
+        if (g_FsMask != 0) {
+            Fs1815DumpRegs("hw run");
+        }
         g_Running = TRUE;
     }
     LogPrint("hw run: %08x\r\n", status);
