@@ -3,6 +3,9 @@
  */
 #include "driver.h"
 
+#define XUN_MAX_HCI_ACL_SIZE 1021
+#define BTHX_VALID_WRITE_PKT(t) ((t) == HciPacketCommand || (t) == HciPacketAclData)
+
 /* Sends a single H4 frame to the controller, issuing HCI_IBS_WAKE_IND if idle. */
 static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Payload, ULONG Len)
 {
@@ -263,7 +266,7 @@ VOID BthxProcessTxAndSleep(PXUN_BT_CONTEXT Ctx)
 
         st = SendH4Frame(Ctx, hciIn->Type, hciIn->Data, hciIn->DataLen);
         if (NT_SUCCESS(st)) {
-            *((PBTHX_HCI_PACKET_TYPE)outBuf) = pktType;
+            *((BTHX_HCI_PACKET_TYPE *)outBuf) = pktType;
             WdfRequestCompleteWithInformation(req, STATUS_SUCCESS, sizeof(BTHX_HCI_PACKET_TYPE));
         } else {
             WdfRequestComplete(req, st);
@@ -384,7 +387,7 @@ VOID BthxIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutLen, size
         if (NT_SUCCESS(st)) {
             PBTHX_CAPABILITIES caps = (PBTHX_CAPABILITIES)outBuf;
             RtlZeroMemory(caps, sizeof(*caps));
-            caps->MaxAclTransferInSize = MAX_HCI_ACLDATA_SIZE;
+            caps->MaxAclTransferInSize = XUN_MAX_HCI_ACL_SIZE;
             caps->ScoSupport = ScoSupportHCIBypass;
             caps->MaxScoChannels = 1;
             caps->IsDeviceIdleCapable = FALSE;
@@ -410,7 +413,7 @@ VOID BthxIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutLen, size
         {
             PBTHX_HCI_READ_WRITE_CONTEXT hci = (PBTHX_HCI_READ_WRITE_CONTEXT)inBuf;
             BTHX_HCI_PACKET_TYPE pt = (BTHX_HCI_PACKET_TYPE)hci->Type;
-            if (!BTHX_VALID_WRITE_PACKET_TYPE(pt) ||
+            if (!BTHX_VALID_WRITE_PKT(pt) ||
                 actualIn < (size_t)FIELD_OFFSET(BTHX_HCI_READ_WRITE_CONTEXT, Data) + hci->DataLen) {
                 WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
                 return;
@@ -440,7 +443,7 @@ VOID BthxIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutLen, size
             return;
         }
         {
-            BTHX_HCI_PACKET_TYPE pt = *((PBTHX_HCI_PACKET_TYPE)inBuf);
+            BTHX_HCI_PACKET_TYPE pt = *((BTHX_HCI_PACKET_TYPE *)inBuf);
             WDFQUEUE targetQ;
             if (pt == HciPacketEvent) {
                 targetQ = ctx->ReadEventQueue;
@@ -474,3 +477,4 @@ VOID BthxIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutLen, size
         }
     }
 }
+
