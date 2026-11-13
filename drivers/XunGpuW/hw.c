@@ -731,9 +731,9 @@ VOID VaFree(ULONGLONG Va, SIZE_T Size)
 
 /* ---------------------------------------------------------------- kernel buffers */
 
-#define SCANOUT_POOL_SLOTS       5
+#define SCANOUT_POOL_SLOTS       10
 #define SCANOUT_POOL_SLOT_SIZE   (10ULL * 1024 * 1024)
-#define MAX_CONTIG_SCANOUT_BYTES (50ULL * 1024 * 1024)
+#define MAX_CONTIG_SCANOUT_BYTES (100ULL * 1024 * 1024)
 
 typedef struct _SCANOUT_SLOT {
     PVOID     Va;

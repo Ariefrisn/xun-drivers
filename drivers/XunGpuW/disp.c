@@ -91,23 +91,32 @@ static VOID MdpScanFrom(ULONG Pa, ULONG Stride, BOOLEAN Flip)
     WRITE_REGISTER_ULONG((volatile ULONG *)(g_Mdp + MDP_CTL0 + CTL_FLUSH), CTL_FLUSH_VIG0 | CTL_FLUSH_CTL);
 }
 
+static BOOLEAN DirectCanScanout(const TGPU_ALLOCATION *Al)
+{
+    D3DKMDT_VIDPN_PRESENT_PATH_ROTATION rot = (D3DKMDT_VIDPN_PRESENT_PATH_ROTATION)g_PathRotation;
+
+    return g_DirectOk && Al != NULL && Al->Bo != NULL &&
+           (rot == D3DKMDT_VPPR_IDENTITY || rot == D3DKMDT_VPPR_ROTATE180 || IsRotationLandscape(rot)) &&
+           Al->Desc.width == g_Post.Width && Al->Desc.height == g_Post.Height &&
+           Al->Bo->ScanoutPa != 0 && Al->Bo->ScanoutPa + Al->Desc.bo_offset < 0x100000000ULL;
+}
+
 /* point VIG0 at Al when it is a BO-backed panel-axis primary (Identity/180/90/270 if already WxH); TRUE = no CPU copy needed.
    Caller must run at DIRQL (DispSetSourceAddress) or via DirectSelectLocked() so VIG0/CTL_FLUSH writes never race. */
 static BOOLEAN DirectSelect(TGPU_ALLOCATION *Al)
 {
     D3DKMDT_VIDPN_PRESENT_PATH_ROTATION rot = (D3DKMDT_VIDPN_PRESENT_PATH_ROTATION)g_PathRotation;
 
-    if (g_DirectOk && Al != NULL && Al->Bo != NULL &&
-        (rot == D3DKMDT_VPPR_IDENTITY || rot == D3DKMDT_VPPR_ROTATE180 || IsRotationLandscape(rot)) &&
-        Al->Desc.width == g_Post.Width && Al->Desc.height == g_Post.Height &&
-        Al->Bo->ScanoutPa != 0 && Al->Bo->ScanoutPa + Al->Desc.bo_offset < 0x100000000ULL) {
+    if (DirectCanScanout(Al)) {
         BOOLEAN flip = (rot == D3DKMDT_VPPR_ROTATE180) ? !g_DispFlip : g_DispFlip;
         MdpScanFrom((ULONG)(Al->Bo->ScanoutPa + Al->Desc.bo_offset), Al->Desc.pitch, flip);
         InterlockedExchange(&g_DirectActive, 1);
         g_DirectFlips++;
         return TRUE;
     }
-    if (g_DirectOk && InterlockedExchange(&g_DirectActive, 0)) {
+    /* When Al == NULL (explicit teardown/destroy), hand MDP back to g_Fb immediately; for non-direct
+       allocations keep the current image steady until CopyRectToFb updates g_Fb, avoiding stale-FB flicker. */
+    if (Al == NULL && g_DirectOk && InterlockedExchange(&g_DirectActive, 0)) {
         MdpScanFrom(g_FbAddr, g_FbStride, FALSE);
     }
     return FALSE;
@@ -472,11 +481,14 @@ VOID DispScanoutWork(VOID)
 
     DispScanLock();
     al = g_ScanCur;
-    if (al != NULL && !g_DirectActive && g_Fb != NULL && g_Visible && (px = AllocPixels(al)) != NULL) {
+    if (al != NULL && !DirectCanScanout(al) && g_Fb != NULL && g_Visible && (px = AllocPixels(al)) != NULL) {
         all.left = all.top = 0;
         all.right = al->Desc.width;
         all.bottom = al->Desc.height;
         CopyRectToFb(px, AllocByteSize(al), al->Desc.pitch, al->Desc.width, al->Desc.height, &all);
+        if (g_DirectActive) {
+            DirectSelectLocked(NULL);
+        }
         if (++count <= 5) {
             LogPrint("scanout: %ux%u pitch %u from %p (%s)\n", al->Desc.width, al->Desc.height, al->Desc.pitch, al,
                      al->Bo != NULL ? "bo" : "vidmm");
@@ -491,7 +503,7 @@ VOID DispPresentRects(TGPU_ALLOCATION *Dst, const RECT *Rects, ULONG Count)
     SIZE_T maxBytes;
     ULONG i;
 
-    if (Dst != g_ScanCur || g_DirectActive || g_Fb == NULL || !g_Visible) {
+    if (Dst != g_ScanCur || DirectCanScanout(Dst) || g_Fb == NULL || !g_Visible) {
         return;
     }
     DispScanLock();
@@ -499,6 +511,9 @@ VOID DispPresentRects(TGPU_ALLOCATION *Dst, const RECT *Rects, ULONG Count)
         maxBytes = AllocByteSize(Dst);
         for (i = 0; i < Count; i++) {
             CopyRectToFb(px, maxBytes, Dst->Desc.pitch, Dst->Desc.width, Dst->Desc.height, &Rects[i]);
+        }
+        if (g_DirectActive) {
+            DirectSelectLocked(NULL);
         }
     }
     DispScanUnlock();

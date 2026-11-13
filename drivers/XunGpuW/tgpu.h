@@ -19,7 +19,7 @@
 #include "msm_drm_k.h"
 #include "xungpu_escape.h"
 
-#define TGPU_VERSION        "v0.46.5"
+#define TGPU_VERSION        "v0.46.6"
 #define TGPU_POOL_TAG       'WupG'
 
 /* ---- log.c ---- */
