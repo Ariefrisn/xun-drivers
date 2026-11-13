@@ -81,6 +81,11 @@ for %%d in (XunButtons XunBacklight XunBattery XunCpu XunRpm) do (
     if errorlevel 1 (
       "%DEVCON%" install "%DRV%\%%d\%%d.inf" Root\%%d >> "%L%" 2>&1
       echo %%d install exit !errorlevel! >> "%L%"
+    ) else (
+      if /i "%%d"=="XunRpm" (
+        "%DEVCON%" update "%DRV%\%%d\%%d.inf" Root\%%d >> "%L%" 2>&1
+        echo %%d update exit !errorlevel! >> "%L%"
+      )
     )
   )
 )

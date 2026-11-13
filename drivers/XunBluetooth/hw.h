@@ -3,11 +3,10 @@
  * Verified from xun DTS (qcom,qup_uart@4a8c000, bt_wcn3990, pm6125_l9/l16/l17/l23),
  * gcc-khaje.ko (gcc_qupv3_wrap0_s3_clk / s3_clk_src), and Linux msm_geni_serial / btqca.
  *
- *  - QUPv3 Wrap 0:  0x04AC0000 (HW_VER at +0x4)
  *  - QUP0 SE3 UART: 0x04A8C000 (0x4000 bytes)
  *  - TLMM EAST:     GPIO 8 CTS, GPIO 9 RTS, GPIO 10 TX, GPIO 11 RX (func 1), GPIO 87 bt-sw-ctrl
  *  - GCC QUP0 S3:   APCS vote 0x7900C bits {6,7,8,9,13}, CBCR 0x1F4D4, RCG 0x1F4D8
- *  - SPMI PM6125:   Observer 0x03E00000, Core 0x01C40000, SID 1 L9/L16/L17/L23
+ *  - Power rails:   PM6125 L9/L16/L17/L23 managed via XunRpm SMD
  *  - Controller:    WCN3990 / WCN3950 H4 + HCI_IBS (0xFC/0xFD/0xFE)
  */
 #pragma once
@@ -15,8 +14,8 @@
 /* ---- TLMM (pinctrl-khaje) ------------------------------------------------ */
 #define TLMM_BASE                   0x00400000ULL
 #define TLMM_TILE_EAST              0x00900000ULL
-#define TLMM_PIN_STRIDE             0x1000
-#define TLMM_EAST_MAP_SIZE          0x60000ULL  /* covers GPIO 0..95 on EAST tile */
+#define TLMM_PIN_STRIDE             0x1000ULL
+#define TLMM_PIN_PA(tile, pin)      (TLMM_BASE + (tile) + (ULONGLONG)(pin) * TLMM_PIN_STRIDE)
 
 #define TLMM_CTL                    0x0         /* pull[1:0] func[5:2] drv[8:6] oe[9] */
 #define TLMM_IO                     0x4         /* in[0] out[1] */
@@ -34,7 +33,6 @@
 
 /* ---- GCC (gcc-khaje) ----------------------------------------------------- */
 #define GCC_BASE                    0x01400000ULL
-#define GCC_MAP_SIZE                0x80000ULL
 #define GCC_APCS_VOTE_REG           0x7900C
 #define GCC_QUP0_M_AHB_BIT          6
 #define GCC_QUP0_S_AHB_BIT          7
@@ -66,30 +64,7 @@
 #define RCG_CMD_ROOT_OFF            (1u << 31)
 #define RCG_DFS_EN                  (1u << 0)
 
-/* ---- SPMI Arbiter v5 read-only observer (PM6125 LDO check) --------------- */
-#define SPMI_CORE_PA                0x01C40000ULL
-#define SPMI_OBS_PA                 0x03E00000ULL
-#define SPMI_MAX_CHANNELS           512
-#define SPMI_MAPPING_TABLE_REG(i)   (0x0900u + 4u * (i))
-#define SPMI_OBS_STATUS(ch)         (0x10000u * (ch) + 0x08u)
-#define SPMI_OBS_RDATA0(ch)         (0x10000u * (ch) + 0x18u)
-#define SPMI_OBS_CMD(ch)            (0x10000u * (ch) + 0x00u)
-#define SPMI_LDO_STATUS1_REG        0x08
-#define SPMI_LDO_VSET_LB_REG        0x40
-#define SPMI_LDO_EN_CTL_REG         0x46
-
-#define PM6125_SID                  1u
-#define PM6125_LDO9_PERIPH          0x48u
-#define PM6125_LDO16_PERIPH         0x4Fu
-#define PM6125_LDO17_PERIPH         0x50u
-#define PM6125_LDO23_PERIPH         0x56u
-
-/* ---- QUPv3 Wrapper & SE3 UART -------------------------------------------- */
-#define QUP0_WRAP_PA                0x04AC0000ULL
-#define QUP0_WRAP_SIZE              0x4000ULL
-#define QUPV3_HW_VER_REG            0x04
-#define QUP_SE_VERSION_2_5          0x20050000u
-
+/* ---- QUPv3 SE3 UART ------------------------------------------------------ */
 #define QUP0_SE3_PA                 0x04A8C000ULL
 #define GENI_SE_SIZE                0x4000ULL
 
@@ -278,3 +253,4 @@ typedef struct _QCA_TLV_NVM_HDR {
     ULONG  Reserve2;
 } QCA_TLV_NVM_HDR;
 #pragma pack(pop)
+

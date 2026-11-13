@@ -7,7 +7,7 @@
 #include <BthXDDI.h>
 #include "hw.h"
 
-#define XUN_BT_VERSION   "v0.1"
+#define XUN_BT_VERSION   "v0.2"
 #define XUN_BT_POOL_TAG  'XBtU'
 
 typedef struct _MMIO_RANGE {
@@ -80,13 +80,11 @@ typedef struct _XUN_BT_CONTEXT {
     WDFSPINLOCK  Lock;
 
     MMIO_RANGE   Se;
-    MMIO_RANGE   QupWrap;
-    MMIO_RANGE   Gcc;
-    MMIO_RANGE   Tlmm;
-    MMIO_RANGE   SpmiCore;
-    MMIO_RANGE   SpmiObs;
+    MMIO_RANGE   GccVote;
+    MMIO_RANGE   GccQupS3;
+    MMIO_RANGE   TlmmUart;
+    MMIO_RANGE   TlmmSwCtrl;
 
-    ULONG        QupHwVer;
     ULONG        TxDepth;
     ULONG        RxDepth;
     ULONG        SamplingRate;
@@ -140,8 +138,6 @@ VOID     UartSetFlowControl(PXUN_BT_CONTEXT Ctx, BOOLEAN DisableFlow);
 VOID     UartFlushRx(PXUN_BT_CONTEXT Ctx);
 NTSTATUS UartWriteSync(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len, ULONG TimeoutMs);
 ULONG    UartReadPoll(PXUN_BT_CONTEXT Ctx, UCHAR *OutBuf, ULONG MaxLen);
-VOID     BtLogPmicRails(PXUN_BT_CONTEXT Ctx, PCSTR Tag);
-BOOLEAN  BtAreAllLdosOn(PXUN_BT_CONTEXT Ctx);
 
 /* wcn3990.c */
 NTSTATUS WcnInitializeRadio(PXUN_BT_CONTEXT Ctx);
@@ -152,3 +148,4 @@ VOID     BthxIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutLen, 
 VOID     BthxFeedRxBytes(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len);
 VOID     BthxDrainQueuesOnStop(PXUN_BT_CONTEXT Ctx);
 VOID     BthxProcessTxAndSleep(PXUN_BT_CONTEXT Ctx);
+

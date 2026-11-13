@@ -1,8 +1,7 @@
 /*
  * Low-level hardware helpers for XunBluetooth:
- *   - MMIO map/unmap + SPMI Arbiter v5 read-only observer (PM6125 L9/L16/L17/L23)
- *   - TLMM EAST GPIO 8..11 (QUP0 SE3 UART) + GPIO 87 (bt-sw-ctrl)
- *   - GCC QUP0 S3 clock + DFSR / MND RCG programming
+ *   - TLMM EAST GPIO 8..11 (QUP0 SE3 UART) + GPIO 87 (bt-sw-ctrl), single-page mappings
+ *   - GCC QUP0 S3 clock + DFSR / MND RCG programming, single-page mappings
  *   - QUPv3 GENI SE3 UART FIFO TX/RX, baudrate, and HW RTS/CTS control
  */
 #include "driver.h"
@@ -23,104 +22,15 @@ static VOID MmioUnmap(PMMIO_RANGE Range)
     }
 }
 
-/* ---- SPMI Observer (read-only) ------------------------------------------- */
-
-static LONG SpmiFindChannel(PXUN_BT_CONTEXT Ctx, UCHAR Sid, UCHAR Periph)
-{
-    ULONG ppid = ((ULONG)Sid << 8) | (ULONG)Periph;
-    ULONG i;
-
-    if (Ctx->SpmiCore.Va == NULL) {
-        return -1;
-    }
-    for (i = 0; i < SPMI_MAX_CHANNELS; i++) {
-        ULONG entry = MmioRead32(&Ctx->SpmiCore, SPMI_MAPPING_TABLE_REG(i));
-        if (((entry >> 8) & 0xFFFu) == ppid) {
-            return (LONG)i;
-        }
-    }
-    return -1;
-}
-
-static BOOLEAN SpmiReadByte(PXUN_BT_CONTEXT Ctx, UCHAR Sid, UCHAR Periph, UCHAR RegOff, UCHAR *OutVal)
-{
-    LONG ch = SpmiFindChannel(Ctx, Sid, Periph);
-    ULONG cmd;
-    ULONG st = 0;
-    ULONG i;
-
-    if (ch < 0 || Ctx->SpmiObs.Va == NULL) {
-        return FALSE;
-    }
-    cmd = (1u << 27) | ((ULONG)RegOff << 16); /* OPCODE=EXT_READL(1), byte_cnt=0 (1 byte) */
-    MmioWrite32(&Ctx->SpmiObs, SPMI_OBS_CMD((ULONG)ch), cmd);
-    for (i = 0; i < 200; i++) {
-        st = MmioRead32(&Ctx->SpmiObs, SPMI_OBS_STATUS((ULONG)ch));
-        if (st & 1u) {
-            if ((st & 0xFCu) == 0) {
-                *OutVal = (UCHAR)(MmioRead32(&Ctx->SpmiObs, SPMI_OBS_RDATA0((ULONG)ch)) & 0xFFu);
-                return TRUE;
-            }
-            return FALSE;
-        }
-        BusyWaitUs(10);
-    }
-    return FALSE;
-}
-
-BOOLEAN BtAreAllLdosOn(PXUN_BT_CONTEXT Ctx)
-{
-    static const UCHAR kLdos[] = {
-        PM6125_LDO9_PERIPH,
-        PM6125_LDO16_PERIPH,
-        PM6125_LDO17_PERIPH,
-        PM6125_LDO23_PERIPH
-    };
-    ULONG i;
-
-    for (i = 0; i < ARRAYSIZE(kLdos); i++) {
-        UCHAR s1 = 0;
-        if (!SpmiReadByte(Ctx, PM6125_SID, kLdos[i], SPMI_LDO_STATUS1_REG, &s1) || (s1 & 0x80u) == 0) {
-            return FALSE;
-        }
-    }
-    return TRUE;
-}
-
-VOID BtLogPmicRails(PXUN_BT_CONTEXT Ctx, PCSTR Tag)
-{
-    static const struct { PCSTR Name; UCHAR Periph; } kRails[] = {
-        { "L9 ", PM6125_LDO9_PERIPH },
-        { "L16", PM6125_LDO16_PERIPH },
-        { "L17", PM6125_LDO17_PERIPH },
-        { "L23", PM6125_LDO23_PERIPH },
-    };
-    ULONG i;
-
-    for (i = 0; i < ARRAYSIZE(kRails); i++) {
-        UCHAR st = 0, en = 0, vl = 0, vh = 0;
-        BOOLEAN okSt = SpmiReadByte(Ctx, PM6125_SID, kRails[i].Periph, SPMI_LDO_STATUS1_REG, &st);
-        BOOLEAN okEn = SpmiReadByte(Ctx, PM6125_SID, kRails[i].Periph, SPMI_LDO_EN_CTL_REG, &en);
-        BOOLEAN okVl = SpmiReadByte(Ctx, PM6125_SID, kRails[i].Periph, SPMI_LDO_VSET_LB_REG, &vl);
-        BOOLEAN okVh = SpmiReadByte(Ctx, PM6125_SID, kRails[i].Periph, SPMI_LDO_VSET_LB_REG + 1, &vh);
-        ULONG mv = okVl && okVh ? (((ULONG)vh << 8) | vl) : 0;
-        LogPrint("spmi[%s] %s (0x%02x): st=%02x(%s) en=%02x(%s) mv=%u\n",
-                 Tag, kRails[i].Name, kRails[i].Periph,
-                 st, okSt ? ((st & 0x80u) ? "ON" : "OFF") : "ERR",
-                 en, okEn ? ((en & 0x80u) ? "EN" : "DIS") : "ERR",
-                 mv);
-    }
-}
-
 /* ---- TLMM EAST ----------------------------------------------------------- */
 
-static VOID TlmmConfigPin(PXUN_BT_CONTEXT Ctx, ULONG Pin, ULONG Func, ULONG Pull, ULONG DriveMa, BOOLEAN Output)
+static VOID TlmmConfigPinRange(PMMIO_RANGE Range, ULONG RelPin, ULONG Func, ULONG Pull, ULONG DriveMa, BOOLEAN Output)
 {
     ULONG ctl = (Pull & 0x3u) | ((Func & 0xFu) << 2) | ((TLMM_DRV_MA(DriveMa) & 0x7u) << 6);
     if (Output) {
         ctl |= (1u << 9);
     }
-    MmioWrite32(&Ctx->Tlmm, Pin * TLMM_PIN_STRIDE + TLMM_CTL, ctl);
+    MmioWrite32(Range, RelPin * (ULONG)TLMM_PIN_STRIDE + TLMM_CTL, ctl);
 }
 
 static VOID TlmmSetupUartPins(PXUN_BT_CONTEXT Ctx)
@@ -128,21 +38,21 @@ static VOID TlmmSetupUartPins(PXUN_BT_CONTEXT Ctx)
     ULONG swCtl;
     ULONG swIo;
 
-    /* Per xun DTS qupv3_se3_4pins: GPIO 8..11 EAST func 1, 2mA */
-    TlmmConfigPin(Ctx, BT_GPIO_CTS, BT_UART_FUNC_QUP0_S3, TLMM_PULL_NONE, 2, FALSE);
-    TlmmConfigPin(Ctx, BT_GPIO_RTS, BT_UART_FUNC_QUP0_S3, TLMM_PULL_DOWN, 2, FALSE);
-    TlmmConfigPin(Ctx, BT_GPIO_TX,  BT_UART_FUNC_QUP0_S3, TLMM_PULL_UP,   2, FALSE);
-    TlmmConfigPin(Ctx, BT_GPIO_RX,  BT_UART_FUNC_QUP0_S3, TLMM_PULL_NONE, 2, FALSE);
+    /* Per xun DTS qupv3_se3_4uart_pins: GPIO 8..11 EAST func 1, 2mA */
+    TlmmConfigPinRange(&Ctx->TlmmUart, BT_GPIO_CTS - BT_GPIO_CTS, BT_UART_FUNC_QUP0_S3, TLMM_PULL_NONE, 2, FALSE);
+    TlmmConfigPinRange(&Ctx->TlmmUart, BT_GPIO_RTS - BT_GPIO_CTS, BT_UART_FUNC_QUP0_S3, TLMM_PULL_DOWN, 2, FALSE);
+    TlmmConfigPinRange(&Ctx->TlmmUart, BT_GPIO_TX  - BT_GPIO_CTS, BT_UART_FUNC_QUP0_S3, TLMM_PULL_UP,   2, FALSE);
+    TlmmConfigPinRange(&Ctx->TlmmUart, BT_GPIO_RX  - BT_GPIO_CTS, BT_UART_FUNC_QUP0_S3, TLMM_PULL_NONE, 2, FALSE);
 
     /* Configure GPIO 87 (bt-sw-ctrl) as pulled-down input and log its initial state */
-    TlmmConfigPin(Ctx, BT_GPIO_SW_CTRL, 0, TLMM_PULL_DOWN, 2, FALSE);
-    swCtl = MmioRead32(&Ctx->Tlmm, BT_GPIO_SW_CTRL * TLMM_PIN_STRIDE + TLMM_CTL);
-    swIo = MmioRead32(&Ctx->Tlmm, BT_GPIO_SW_CTRL * TLMM_PIN_STRIDE + TLMM_IO);
+    TlmmConfigPinRange(&Ctx->TlmmSwCtrl, 0, 0, TLMM_PULL_DOWN, 2, FALSE);
+    swCtl = MmioRead32(&Ctx->TlmmSwCtrl, TLMM_CTL);
+    swIo = MmioRead32(&Ctx->TlmmSwCtrl, TLMM_IO);
     LogPrint("tlmm: CTS=%08x RTS=%08x TX=%08x RX=%08x SW_CTRL(87) ctl=%08x io=%08x\n",
-             MmioRead32(&Ctx->Tlmm, BT_GPIO_CTS * TLMM_PIN_STRIDE + TLMM_CTL),
-             MmioRead32(&Ctx->Tlmm, BT_GPIO_RTS * TLMM_PIN_STRIDE + TLMM_CTL),
-             MmioRead32(&Ctx->Tlmm, BT_GPIO_TX  * TLMM_PIN_STRIDE + TLMM_CTL),
-             MmioRead32(&Ctx->Tlmm, BT_GPIO_RX  * TLMM_PIN_STRIDE + TLMM_CTL),
+             MmioRead32(&Ctx->TlmmUart, (BT_GPIO_CTS - BT_GPIO_CTS) * (ULONG)TLMM_PIN_STRIDE + TLMM_CTL),
+             MmioRead32(&Ctx->TlmmUart, (BT_GPIO_RTS - BT_GPIO_CTS) * (ULONG)TLMM_PIN_STRIDE + TLMM_CTL),
+             MmioRead32(&Ctx->TlmmUart, (BT_GPIO_TX  - BT_GPIO_CTS) * (ULONG)TLMM_PIN_STRIDE + TLMM_CTL),
+             MmioRead32(&Ctx->TlmmUart, (BT_GPIO_RX  - BT_GPIO_CTS) * (ULONG)TLMM_PIN_STRIDE + TLMM_CTL),
              swCtl, swIo);
 }
 
@@ -180,32 +90,35 @@ static ULONG DecodeDfsrFreq(ULONG Cfg, ULONG M, ULONG NReg)
 
 static NTSTATUS GccEnableQup0S3(PXUN_BT_CONTEXT Ctx)
 {
+    ULONG voteOff = GCC_APCS_VOTE_REG & 0xFFFu;
+    ULONG cbcrOff = GCC_QUP0_S3_CBCR & 0xFFFu;
+    ULONG rcgOff = GCC_QUP0_S3_RCG & 0xFFFu;
     ULONG vote;
     ULONG cbcr = 0;
     ULONG dfsrCmd;
     ULONG i;
 
-    vote = MmioRead32(&Ctx->Gcc, GCC_APCS_VOTE_REG);
-    MmioWrite32(&Ctx->Gcc, GCC_APCS_VOTE_REG, vote | GCC_QUP0_S3_VOTE_MASK);
+    vote = MmioRead32(&Ctx->GccVote, voteOff);
+    MmioWrite32(&Ctx->GccVote, voteOff, vote | GCC_QUP0_S3_VOTE_MASK);
 
     for (i = 0; i < 200; i++) {
-        cbcr = MmioRead32(&Ctx->Gcc, GCC_QUP0_S3_CBCR);
+        cbcr = MmioRead32(&Ctx->GccQupS3, cbcrOff);
         if ((cbcr & GCC_CBCR_CLK_OFF) == 0) {
             break;
         }
         BusyWaitUs(50);
     }
 
-    dfsrCmd = MmioRead32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_SE_CMD_DFSR_OFF);
+    dfsrCmd = MmioRead32(&Ctx->GccQupS3, rcgOff + RCG_SE_CMD_DFSR_OFF);
     Ctx->DfsEnabled = (dfsrCmd & RCG_DFS_EN) != 0;
     LogPrint("gcc: vote %08x->%08x cbcr=%08x dfsr_cmd=%08x (dfs=%u)\n",
-             vote, MmioRead32(&Ctx->Gcc, GCC_APCS_VOTE_REG), cbcr, dfsrCmd, Ctx->DfsEnabled ? 1 : 0);
+             vote, MmioRead32(&Ctx->GccVote, voteOff), cbcr, dfsrCmd, Ctx->DfsEnabled ? 1 : 0);
 
     if (Ctx->DfsEnabled) {
         for (i = 0; i < RCG_DFSR_LEVELS; i++) {
-            ULONG cfg = MmioRead32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_SE_PERF_DFSR(i));
-            ULONG m = MmioRead32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_SE_PERF_M_DFSR(i)) & 0xFFFFu;
-            ULONG nReg = MmioRead32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_SE_PERF_N_DFSR(i)) & 0xFFFFu;
+            ULONG cfg = MmioRead32(&Ctx->GccQupS3, rcgOff + RCG_SE_PERF_DFSR(i));
+            ULONG m = MmioRead32(&Ctx->GccQupS3, rcgOff + RCG_SE_PERF_M_DFSR(i)) & 0xFFFFu;
+            ULONG nReg = MmioRead32(&Ctx->GccQupS3, rcgOff + RCG_SE_PERF_N_DFSR(i)) & 0xFFFFu;
             if (cfg != 0 || m != 0 || nReg != 0) {
                 Ctx->DfsFreqs[i] = DecodeDfsrFreq(cfg, m, nReg);
                 LogPrint("gcc: dfsr[%u] cfg=%08x m=%u n_reg=%04x -> %u Hz\n",
@@ -219,15 +132,16 @@ static NTSTATUS GccEnableQup0S3(PXUN_BT_CONTEXT Ctx)
 
 static NTSTATUS GccProgramDirectRcg(PXUN_BT_CONTEXT Ctx, ULONG TargetRate)
 {
+    ULONG rcgOff = GCC_QUP0_S3_RCG & 0xFFFu;
     ULONG cfg;
     ULONG m = 0, n = 0;
     ULONG i;
 
     if (TargetRate == 19200000u) {
-        MmioWrite32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_CFG_OFF, 0);
-        MmioWrite32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_M_OFF, 0);
-        MmioWrite32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_N_OFF, 0);
-        MmioWrite32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_D_OFF, 0);
+        MmioWrite32(&Ctx->GccQupS3, rcgOff + RCG_CFG_OFF, 0);
+        MmioWrite32(&Ctx->GccQupS3, rcgOff + RCG_M_OFF, 0);
+        MmioWrite32(&Ctx->GccQupS3, rcgOff + RCG_N_OFF, 0);
+        MmioWrite32(&Ctx->GccQupS3, rcgOff + RCG_D_OFF, 0);
     } else {
         if (TargetRate == 7372800u)       { m = 384; n = 15625; }
         else if (TargetRate == 14745600u) { m = 768; n = 15625; }
@@ -238,16 +152,16 @@ static NTSTATUS GccProgramDirectRcg(PXUN_BT_CONTEXT Ctx, ULONG TargetRate)
 
         /* src=1 (300 MHz GPLL0_OUT_EVEN), pre_div=1, dual-edge MND mode (2 << 12) */
         cfg = (1u << 0) | (1u << 8) | (2u << 12);
-        MmioWrite32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_CFG_OFF, cfg);
-        MmioWrite32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_M_OFF, m);
-        MmioWrite32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_N_OFF, (~(n - m)) & 0xFFFFu);
-        MmioWrite32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_D_OFF, (~n) & 0xFFFFu);
+        MmioWrite32(&Ctx->GccQupS3, rcgOff + RCG_CFG_OFF, cfg);
+        MmioWrite32(&Ctx->GccQupS3, rcgOff + RCG_M_OFF, m);
+        MmioWrite32(&Ctx->GccQupS3, rcgOff + RCG_N_OFF, (~(n - m)) & 0xFFFFu);
+        MmioWrite32(&Ctx->GccQupS3, rcgOff + RCG_D_OFF, (~n) & 0xFFFFu);
     }
 
-    MmioWrite32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_CMD_OFF,
-                MmioRead32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_CMD_OFF) | RCG_CMD_UPDATE);
+    MmioWrite32(&Ctx->GccQupS3, rcgOff + RCG_CMD_OFF,
+                MmioRead32(&Ctx->GccQupS3, rcgOff + RCG_CMD_OFF) | RCG_CMD_UPDATE);
     for (i = 0; i < 200; i++) {
-        if ((MmioRead32(&Ctx->Gcc, GCC_QUP0_S3_RCG + RCG_CMD_OFF) & RCG_CMD_UPDATE) == 0) {
+        if ((MmioRead32(&Ctx->GccQupS3, rcgOff + RCG_CMD_OFF) & RCG_CMD_UPDATE) == 0) {
             return STATUS_SUCCESS;
         }
         BusyWaitUs(10);
@@ -552,21 +466,18 @@ NTSTATUS UartHwInit(PXUN_BT_CONTEXT Ctx)
     ULONG proto;
     ULONG rxRfr;
 
-    st = MmioMap(&Ctx->Tlmm, TLMM_BASE + TLMM_TILE_EAST, TLMM_EAST_MAP_SIZE);
+    st = MmioMap(&Ctx->TlmmUart, TLMM_PIN_PA(TLMM_TILE_EAST, BT_GPIO_CTS), 4ULL * TLMM_PIN_STRIDE);
     if (!NT_SUCCESS(st)) goto Fail;
-    st = MmioMap(&Ctx->Gcc, GCC_BASE, GCC_MAP_SIZE);
+    st = MmioMap(&Ctx->TlmmSwCtrl, TLMM_PIN_PA(TLMM_TILE_EAST, BT_GPIO_SW_CTRL), TLMM_PIN_STRIDE);
     if (!NT_SUCCESS(st)) goto Fail;
-    st = MmioMap(&Ctx->QupWrap, QUP0_WRAP_PA, QUP0_WRAP_SIZE);
+    st = MmioMap(&Ctx->GccVote, GCC_BASE + (GCC_APCS_VOTE_REG & ~0xFFFULL), 0x1000ULL);
+    if (!NT_SUCCESS(st)) goto Fail;
+    st = MmioMap(&Ctx->GccQupS3, GCC_BASE + (GCC_QUP0_S3_CBCR & ~0xFFFULL), 0x1000ULL);
     if (!NT_SUCCESS(st)) goto Fail;
     st = MmioMap(&Ctx->Se, QUP0_SE3_PA, GENI_SE_SIZE);
     if (!NT_SUCCESS(st)) goto Fail;
 
-    /* Optional read-only SPMI mapping for L9/L16/L17/L23 verification */
-    (VOID)MmioMap(&Ctx->SpmiCore, SPMI_CORE_PA, 0x2000ULL);
-    (VOID)MmioMap(&Ctx->SpmiObs, SPMI_OBS_PA, 0x2000000ULL);
-
     TlmmSetupUartPins(Ctx);
-    BtLogPmicRails(Ctx, "boot");
 
     st = GccEnableQup0S3(Ctx);
     if (!NT_SUCCESS(st)) {
@@ -574,8 +485,8 @@ NTSTATUS UartHwInit(PXUN_BT_CONTEXT Ctx)
         goto Fail;
     }
 
-    Ctx->QupHwVer = MmioRead32(&Ctx->QupWrap, QUPV3_HW_VER_REG);
-    Ctx->SamplingRate = (Ctx->QupHwVer >= QUP_SE_VERSION_2_5) ? 16 : 32;
+    /* SM6225 QUPv3 GENI uses 16x oversampling (do not touch QUP wrap MMIO) */
+    Ctx->SamplingRate = 16;
 
     fwRev = MmioRead32(&Ctx->Se, GENI_FW_REVISION_RO);
     proto = (fwRev >> 8) & 0xFFu;
@@ -584,8 +495,8 @@ NTSTATUS UartHwInit(PXUN_BT_CONTEXT Ctx)
     if (Ctx->TxDepth == 0) Ctx->TxDepth = 16;
     if (Ctx->RxDepth == 0) Ctx->RxDepth = 16;
 
-    LogPrint("geni: qup_ver=%08x samp=%u fw_rev=%08x proto=%u tx=%u rx=%u ios=%08x\n",
-             Ctx->QupHwVer, Ctx->SamplingRate, fwRev, proto,
+    LogPrint("geni: samp=%u fw_rev=%08x proto=%u tx=%u rx=%u ios=%08x\n",
+             Ctx->SamplingRate, fwRev, proto,
              Ctx->TxDepth, Ctx->RxDepth, MmioRead32(&Ctx->Se, SE_GENI_IOS));
 
     if (proto != GENI_PROTO_UART) {
@@ -656,10 +567,10 @@ VOID UartHwDeinit(PXUN_BT_CONTEXT Ctx)
     if (Ctx->Se.Va != NULL) {
         GeniStopRx(Ctx);
     }
-    MmioUnmap(&Ctx->SpmiObs);
-    MmioUnmap(&Ctx->SpmiCore);
     MmioUnmap(&Ctx->Se);
-    MmioUnmap(&Ctx->QupWrap);
-    MmioUnmap(&Ctx->Gcc);
-    MmioUnmap(&Ctx->Tlmm);
+    MmioUnmap(&Ctx->GccQupS3);
+    MmioUnmap(&Ctx->GccVote);
+    MmioUnmap(&Ctx->TlmmSwCtrl);
+    MmioUnmap(&Ctx->TlmmUart);
 }
+

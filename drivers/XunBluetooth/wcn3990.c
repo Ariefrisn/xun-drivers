@@ -503,36 +503,46 @@ NTSTATUS WcnInitializeRadio(PXUN_BT_CONTEXT Ctx)
     WCHAR nvmName[64];
     PUCHAR fwBuf = NULL;
     ULONG fwSize = 0;
-    ULONG waitMs = 0;
+    ULONG attempt;
 
     /* Give XunRpm a moment if it is starting concurrently on boot */
-    while (waitMs < 3000 && !BtAreAllLdosOn(Ctx) && !Ctx->StopRequested) {
+    for (attempt = 0; attempt < 5 && !Ctx->StopRequested; attempt++) {
         SleepMs(100);
-        waitMs += 100;
     }
     if (Ctx->StopRequested) {
         return STATUS_CANCELLED;
     }
-    BtLogPmicRails(Ctx, "pre-init");
 
-    /* Clean reset pulse at 2400 baud, then power-on pulse at 115200 baud */
-    st = UartSetBaud(Ctx, 2400);
-    if (!NT_SUCCESS(st)) {
-        LogPrint("wcn: 2400 baud unavailable (%08x), skipping OFF pulse\n", st);
-    } else {
-        (VOID)SendPowerPulse(Ctx, FALSE);
-    }
+    for (attempt = 0; attempt < 2; attempt++) {
+        if (Ctx->StopRequested) {
+            return STATUS_CANCELLED;
+        }
+        /* Clean reset pulse at 2400 baud, then power-on pulse at 115200 baud */
+        st = UartSetBaud(Ctx, 2400);
+        if (!NT_SUCCESS(st)) {
+            LogPrint("wcn: 2400 baud unavailable (%08x), skipping OFF pulse\n", st);
+        } else {
+            (VOID)SendPowerPulse(Ctx, FALSE);
+        }
 
-    st = UartSetBaud(Ctx, 115200);
-    if (!NT_SUCCESS(st)) {
-        return st;
-    }
-    st = SendPowerPulse(Ctx, TRUE);
-    if (!NT_SUCCESS(st)) {
-        return st;
-    }
+        st = UartSetBaud(Ctx, 115200);
+        if (!NT_SUCCESS(st)) {
+            return st;
+        }
+        st = SendPowerPulse(Ctx, TRUE);
+        if (!NT_SUCCESS(st)) {
+            return st;
+        }
 
-    st = ReadSocVersion(Ctx);
+        st = ReadSocVersion(Ctx);
+        if (NT_SUCCESS(st)) {
+            break;
+        }
+        if (attempt == 0) {
+            LogPrint("wcn: EDL version attempt 1 failed (%08x), waiting for LDO rails and retrying\n", st);
+            SleepMs(1000);
+        }
+    }
     if (!NT_SUCCESS(st)) {
         return st;
     }
