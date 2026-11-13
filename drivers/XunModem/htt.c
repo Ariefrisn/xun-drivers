@@ -444,6 +444,7 @@ VOID HttSummary(VOID)
 
 VOID HttReset(VOID)
 {
+#ifdef XUN_WIFICX
   if (mTxq != NULL) {
     KIRQL irql;
     KeAcquireSpinLock (&mTxqLock, &irql);
@@ -457,6 +458,7 @@ VOID HttReset(VOID)
   mTxPoolPa = 0;
   mTxBusy = 0;
   mTxSent = mTxDone = mTxFail = mTxDrop = mRxUp = 0;
+#endif
   if (mBlk != NULL) {
     PhysFree (mBlk);
     mBlk = NULL;
