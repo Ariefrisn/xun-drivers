@@ -290,7 +290,7 @@ static NTSTATUS Fs1815InitOne(UCHAR Addr)
         { 0xBC, 4,  5, 0x0002 }, { 0x4C, 3,  1, 0x0000 }, { 0x22, 0, 16, 0x0028 },
         { 0x23, 0, 16, 0x0027 }, { 0xB8, 0, 16, 0x0002 }, { 0x5D, 0, 16, 0xA001 }
     };
-    /* Exact [SCENE 0x0001] (Music) table from fs1815.fsm */
+    /* Exact [SCENE 0x0001] (Music) table from fs1815.fsm; keep 0x1F=0xCA91 unlocked first for private regs */
     static const FS_REG_ENTRY sceneRegs[] = {
         { 0x20,  0, 16, 0x07C2 }, { 0x18,  0, 16, 0x000A },
         { 0x3F, 15,  1, 0x0000 }, { 0xBC, 15,  1, 0x0000 },
@@ -316,6 +316,7 @@ static NTSTATUS Fs1815InitOne(UCHAR Addr)
         TaSleep(2);
     }
     (VOID)TaI2cWrite16(Addr, 0x14, 0x0018);                 /* dev_mode << 1 */
+    (VOID)TaI2cWrite16(Addr, 0x1F, 0xCA91);                 /* unlock private regs for commonRegs + sceneRegs */
     for (i = 0; i < ARRAYSIZE(commonRegs); i++) {
         (VOID)Fs1815UpdateBits(Addr, commonRegs[i].Reg, commonRegs[i].Shift,
                                commonRegs[i].Len, commonRegs[i].Val);
@@ -325,7 +326,7 @@ static NTSTATUS Fs1815InitOne(UCHAR Addr)
                                sceneRegs[i].Len, sceneRegs[i].Val);
     }
     /* SE1 (0x34/0x35) = 0x0A, SE2 (0x80|0x34/0x35) = 0x09 per fs1815.fsm */
-    ch = (Addr & 0x80u) ? 0x0009u : 0x000Au;
+    ch = ((Addr & 0x7Fu) == 0x34u || (Addr & 0x7Fu) == 0x35u) ? 0x000Au : 0x0009u;
     (VOID)Fs1815UpdateBits(Addr, 0x19, 0, 5, ch);
     (VOID)TaI2cWrite16(Addr, 0x5A, 0xF8E0);
     (VOID)TaI2cWrite16(Addr, 0x1F, 0x0000);                 /* lock private regs */
@@ -362,14 +363,15 @@ static VOID AmpOn(BOOLEAN On)
             }
         }
         for (k = 0; k < ARRAYSIZE(fsAddrs); k++) {
-            USHORT devId = 0, revId = 0;
-            if (NT_SUCCESS(TaI2cRead16(fsAddrs[k], 0x02, &devId)) ||
-                NT_SUCCESS(TaI2cRead16(fsAddrs[k], 0x03, &revId))) {
-                (VOID)TaI2cRead16(fsAddrs[k], 0x03, &revId);
+            USHORT reg01 = 0, devId = 0, revId = 0;
+            if (NT_SUCCESS(TaI2cRead16(fsAddrs[k], 0x03, &revId)) ||
+                NT_SUCCESS(TaI2cRead16(fsAddrs[k], 0x02, &devId))) {
+                (VOID)TaI2cRead16(fsAddrs[k], 0x01, &reg01);
+                (VOID)TaI2cRead16(fsAddrs[k], 0x02, &devId);
                 g_FsMask |= (UCHAR)(1u << k);
                 g_FsDevId[k] = devId;
-                LogPrint("amp detect SE%u fs1815@0x%02x id=%04x rev=%04x\r\n",
-                         (fsAddrs[k] & 0x80u) ? 2u : 1u, fsAddrs[k] & 0x7Fu, devId, revId);
+                LogPrint("amp detect SE%u fs1815@0x%02x reg01=%04x id=%04x rev=%04x\r\n",
+                         (fsAddrs[k] & 0x80u) ? 2u : 1u, fsAddrs[k] & 0x7Fu, reg01, devId, revId);
             }
         }
         if (g_SipaMaskSe1 == 0 && g_FsMask == 0) {
@@ -398,10 +400,23 @@ static VOID AmpOn(BOOLEAN On)
             if (!g_AmpInit) {
                 status = Fs1815InitOne(fsAddrs[k]);
             }
+            (VOID)TaI2cWrite16(fsAddrs[k], 0x1F, 0xCA91);
             (VOID)TaI2cWrite16(fsAddrs[k], 0xBC, 0x9433);
+            (VOID)TaI2cWrite16(fsAddrs[k], 0x1F, 0x0000);
             (VOID)TaI2cWrite16(fsAddrs[k], 0x11, 0x008F);   /* Boost/PLL/Class-D enable */
             status = TaI2cWrite16(fsAddrs[k], 0x10, 0x0000);/* Power UP / unmute */
             (VOID)TaI2cWrite16(fsAddrs[k], 0x06, 0xFF00);   /* 0 dB volume */
+            {
+                USHORT r0 = 0xFFFF, r1 = 0xFFFF, r10 = 0xFFFF, r11 = 0xFFFF, r14 = 0xFFFF, r19 = 0xFFFF;
+                (VOID)TaI2cRead16(fsAddrs[k], 0x00, &r0);
+                (VOID)TaI2cRead16(fsAddrs[k], 0x01, &r1);
+                (VOID)TaI2cRead16(fsAddrs[k], 0x10, &r10);
+                (VOID)TaI2cRead16(fsAddrs[k], 0x11, &r11);
+                (VOID)TaI2cRead16(fsAddrs[k], 0x14, &r14);
+                (VOID)TaI2cRead16(fsAddrs[k], 0x19, &r19);
+                LogPrint("  fs1815 %02x: st=%04x id=%04x pwr=%04x sys=%04x fmt=%04x ch=%04x\r\n",
+                         fsAddrs[k], r0, r1, r10, r11, r14, r19);
+            }
         } else {
             status = TaI2cWrite16(fsAddrs[k], 0x10, 0x0001);/* Power down */
             (VOID)TaI2cWrite16(fsAddrs[k], 0x11, 0x0000);   /* Boost off */
