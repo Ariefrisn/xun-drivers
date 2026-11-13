@@ -224,9 +224,10 @@ static NTSTATUS GemNew(struct drm_msm_gem_new *A)
     if (g_BoBytes > GEM_SOFT_LIMIT_BYTES) {
         BoShrink(0);
     }
-    /* Only screen-sized BOs (>= ~8.4 MB, <= 32 MB) need <4 GB contiguous scanout backing;
-       ignoring MSM_BO_SCANOUT on small buffers prevents exhausting the contiguous scanout budget. */
-    preferContig = (bo->Size >= 8800000 && bo->Size <= 33554432);
+    /* Only screen-sized primary BOs (~8.8..11 MB) or explicit scanout surfaces within 1..11 MB
+       use the contiguous ScanoutPool; 14.6 MB+ app render targets go straight to scattered SMMU. */
+    preferContig = (bo->Size >= 8800000 && bo->Size <= 11534336) ||
+                   ((A->flags & MSM_BO_SCANOUT) != 0 && bo->Size >= (1024ULL * 1024) && bo->Size <= 11534336);
     bo->Mdl = TgAllocPages(bo->Size, preferContig, &bo->Iova, &bo->ScanoutPa, &bo->KernelVa, &bo->Contig);
     if (bo->Mdl == NULL) {
         SIZE_T reclaimed = BoShrink(bo->Size);

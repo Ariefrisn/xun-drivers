@@ -308,12 +308,15 @@ VOID HttTxPoll(VOID)
   KIRQL irql;
   UINT32 n;
 
-  if (mTxq == NULL) {                             /* first call: the queue + DMA pool */
+  if (mTxq == NULL) {                             /* first call: the queue */
     KeInitializeSpinLock (&mTxqLock);
-    mTxPool = PhysAlloc (TX_SLOTS * TX_SLOT_SIZE, &mTxPoolPa);
-    if (mTxPool != NULL) {
-      mTxq = AllocateZeroPool (TX_SLOTS * sizeof (TXQ_ENT));
+    mTxq = AllocateZeroPool (TX_SLOTS * sizeof (TXQ_ENT));
+    if (mTxq == NULL) {
+      return;
     }
+  }
+  if (mTxPool == NULL) {
+    mTxPool = PhysAlloc (TX_SLOTS * TX_SLOT_SIZE, &mTxPoolPa);
     return;
   }
   if (!AssocIsUp ()) {                            /* not associated: nothing may go out */
@@ -437,4 +440,40 @@ VOID HttSummary(VOID)
 #endif
   Out ("  htt: state %u, version %u.%u, %u msgs, %u in-order ind, %u msdus, %u recycled, alloc idx %u\r\n", mState,
        mVerMajor, mVerMinor, mMsgs, mInOrd, mMsdus, mRecycled, mAlloc);
+}
+
+VOID HttReset(VOID)
+{
+  if (mTxq != NULL) {
+    KIRQL irql;
+    KeAcquireSpinLock (&mTxqLock, &irql);
+    mTxqHead = mTxqTail;
+    KeReleaseSpinLock (&mTxqLock, irql);
+  }
+  if (mTxPool != NULL) {
+    PhysFree (mTxPool);
+    mTxPool = NULL;
+  }
+  mTxPoolPa = 0;
+  mTxBusy = 0;
+  mTxSent = mTxDone = mTxFail = mTxDrop = mRxUp = 0;
+  if (mBlk != NULL) {
+    PhysFree (mBlk);
+    mBlk = NULL;
+  }
+  mBlkPa = mRingPa = mIdxPa = mBankPa = mBufPa = 0;
+  mBank = NULL;
+  mRing = NULL;
+  mIdx = NULL;
+  mBuf = NULL;
+  mAlloc = 0;
+  mState = 0;
+  mVerMajor = 0;
+  mVerMinor = 0;
+  mMsgs = 0;
+  mInOrd = 0;
+  mMsdus = 0;
+  mRecycled = 0;
+  mLogged = 0;
+  mReqMs = 0;
 }

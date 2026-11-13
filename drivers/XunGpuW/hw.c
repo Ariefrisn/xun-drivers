@@ -731,9 +731,9 @@ VOID VaFree(ULONGLONG Va, SIZE_T Size)
 
 /* ---------------------------------------------------------------- kernel buffers */
 
-#define SCANOUT_POOL_SLOTS       8
+#define SCANOUT_POOL_SLOTS       5
 #define SCANOUT_POOL_SLOT_SIZE   (10ULL * 1024 * 1024)
-#define MAX_CONTIG_SCANOUT_BYTES (128ULL * 1024 * 1024)
+#define MAX_CONTIG_SCANOUT_BYTES (50ULL * 1024 * 1024)
 
 typedef struct _SCANOUT_SLOT {
     PVOID     Va;
@@ -828,6 +828,7 @@ VOID TgScanoutPoolFree(VOID)
 
 static PMDL TgScanoutPoolAcquire(SIZE_T Size, PULONGLONG Pa, PVOID *KernelVa)
 {
+    static LONG s_PoolLogCount = 0;
     KIRQL irql;
     ULONG i;
     PVOID va = NULL;
@@ -835,6 +836,10 @@ static PMDL TgScanoutPoolAcquire(SIZE_T Size, PULONGLONG Pa, PVOID *KernelVa)
     PMDL mdl;
 
     if (!g_ScanoutPoolLockInit || Size < (1024ULL * 1024) || Size > SCANOUT_POOL_SLOT_SIZE) {
+        if (InterlockedIncrement(&s_PoolLogCount) <= 10) {
+            LogPrint("TgScanoutPoolAcquire: rejected (init=%u size=%llu max=%llu)\n",
+                     g_ScanoutPoolLockInit, (ULONGLONG)Size, (ULONGLONG)SCANOUT_POOL_SLOT_SIZE);
+        }
         return NULL;
     }
     KeAcquireSpinLock(&g_ScanoutPoolLock, &irql);
@@ -848,6 +853,9 @@ static PMDL TgScanoutPoolAcquire(SIZE_T Size, PULONGLONG Pa, PVOID *KernelVa)
     }
     KeReleaseSpinLock(&g_ScanoutPoolLock, irql);
     if (va == NULL) {
+        if (InterlockedIncrement(&s_PoolLogCount) <= 10) {
+            LogPrint("TgScanoutPoolAcquire: rejected (pool full, size=%llu)\n", (ULONGLONG)Size);
+        }
         return NULL;
     }
     mdl = IoAllocateMdl(va, (ULONG)Size, FALSE, FALSE, NULL);
@@ -855,12 +863,18 @@ static PMDL TgScanoutPoolAcquire(SIZE_T Size, PULONGLONG Pa, PVOID *KernelVa)
         KeAcquireSpinLock(&g_ScanoutPoolLock, &irql);
         g_ScanoutPool[i].InUse = FALSE;
         KeReleaseSpinLock(&g_ScanoutPoolLock, irql);
+        if (InterlockedIncrement(&s_PoolLogCount) <= 10) {
+            LogPrint("TgScanoutPoolAcquire: rejected (IoAllocateMdl NULL, size=%llu)\n", (ULONGLONG)Size);
+        }
         return NULL;
     }
     MmBuildMdlForNonPagedPool(mdl);
     RtlZeroMemory(va, Size);
     *KernelVa = va;
     *Pa = pa;
+    if (InterlockedIncrement(&s_PoolLogCount) <= 10) {
+        LogPrint("TgScanoutPoolAcquire: used slot=%u pa=%llx size=%llu\n", i, pa, (ULONGLONG)Size);
+    }
     return mdl;
 }
 
@@ -918,12 +932,9 @@ PMDL TgAllocPages(SIZE_T Size, BOOLEAN PreferContig, PULONGLONG Iova, PULONGLONG
     if (PreferContig && g_ContigScanoutBytes + Size <= MAX_CONTIG_SCANOUT_BYTES) {
         ULONGLONG pa = 0;
         PVOID va = NULL;
-        NTSTATUS mmuSt = STATUS_UNSUCCESSFUL;
+        NTSTATUS mmuSt = STATUS_SUCCESS;
         ULONGLONG iova = 0;
         mdl = TgScanoutPoolAcquire(Size, &pa, &va);
-        if (mdl == NULL) {
-            mdl = TgAllocContig(Size, &pa, &va);
-        }
         if (mdl != NULL) {
             iova = VaAlloc(Size + PAGE_SIZE);
             if (iova != 0) {
@@ -937,6 +948,8 @@ PMDL TgAllocPages(SIZE_T Size, BOOLEAN PreferContig, PULONGLONG Iova, PULONGLONG
                 g_ContigScanoutBytes += Size;
                 return mdl;
             }
+            LogPrint("TgAllocPages: pool map failed size=%llu poolBytes=%llu mdl=%p iova=%llx mmu=%08x\n",
+                     (ULONGLONG)Size, (ULONGLONG)g_ContigScanoutBytes, mdl, iova, mmuSt);
             if (iova != 0) {
                 MmuUnmap(iova, Size);
                 VaFree(iova, Size + PAGE_SIZE);
@@ -945,11 +958,12 @@ PMDL TgAllocPages(SIZE_T Size, BOOLEAN PreferContig, PULONGLONG Iova, PULONGLONG
                 TgFreeContig(mdl, va, Size);
             }
         }
-        LogPrint("TgAllocPages: contig fallback size=%llu poolBytes=%llu mdl=%p iova=%llx mmu=%08x\n",
-                 (ULONGLONG)Size, (ULONGLONG)g_ContigScanoutBytes, mdl, iova, mmuSt);
     } else if (PreferContig) {
-        LogPrint("TgAllocPages: contig budget exceeded size=%llu poolBytes=%llu max=%llu\n",
-                 (ULONGLONG)Size, (ULONGLONG)g_ContigScanoutBytes, (ULONGLONG)MAX_CONTIG_SCANOUT_BYTES);
+        static LONG s_BudgetLogCount = 0;
+        if (InterlockedIncrement(&s_BudgetLogCount) <= 5) {
+            LogPrint("TgAllocPages: scanout pool budget reached size=%llu poolBytes=%llu max=%llu -> scattered SMMU\n",
+                     (ULONGLONG)Size, (ULONGLONG)g_ContigScanoutBytes, (ULONGLONG)MAX_CONTIG_SCANOUT_BYTES);
+        }
     }
 
     lo.QuadPart = 0;

@@ -351,3 +351,24 @@ VOID CeSummary(VOID)
     CeDump ("summary");
   }
 }
+
+VOID CeStop(VOID)
+{
+  mUp = FALSE;
+  if (mRegs != NULL) {
+    UnmapPhys (mRegs, (CE_COUNT + 1) * SIZE_4KB);
+    mRegs = NULL;
+  }
+  if (mShadow != NULL) {
+    UnmapPhys (mShadow, SIZE_4KB);
+    mShadow = NULL;
+  }
+  if (mRri != NULL) {
+    PhysFree ((VOID *)mRri);
+    mRri = NULL;
+    mRriPa = 0;
+  }
+  ZeroMem (mCe, sizeof (mCe));
+  mStartMs = 0;
+  mNextDump = 0;
+}

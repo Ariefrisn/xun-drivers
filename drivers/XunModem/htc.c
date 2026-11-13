@@ -310,3 +310,18 @@ VOID HtcSummary(VOID)
     }
   }
 }
+
+VOID HtcReset(VOID)
+{
+  ZeroMem (mEp, sizeof (mEp));
+  mCreditCount = 0;
+  mCreditSize = 0;
+  mMaxEp = 0;
+  mReady = FALSE;
+  mSetupDone = FALSE;
+  mWmiEid = 0xFF;
+  mHttEid = 0xFF;
+  mDumps = 0;
+  mWmiEvents = 0;
+  mCreditReports = 0;
+}

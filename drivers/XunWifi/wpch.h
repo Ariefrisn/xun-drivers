@@ -15,7 +15,7 @@
 #include "TlvGeneratorParser.hpp"
 #include "wlanif.h"
 
-#define XUN_WIFI_VERSION  "v0.27"
+#define XUN_WIFI_VERSION  "v0.28"
 #define XUN_WIFI_TAG      'iWzT'
 
 #define WLOG(...)           LogPrint (__VA_ARGS__)
@@ -28,6 +28,8 @@ typedef struct _XUN_WIFI_DEVICE
     NETADAPTER  StaAdapter;
     TLV_CONTEXT Tlv;
     PKTHREAD    ModemThread;
+    BOOLEAN     Prepared;
+    volatile LONG ShutdownDone;
 } XUN_WIFI_DEVICE;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(XUN_WIFI_DEVICE, WifiDev);

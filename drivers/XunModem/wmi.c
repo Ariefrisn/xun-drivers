@@ -212,11 +212,17 @@ STATIC VOID FillResCfg(WMI_RES_CFG *C)
 }
 
 /* ath10k_wmi_event_service_ready_work + ath10k_wmi_alloc_host_mem: one PhysAlloc block. */
+STATIC UINT8 *mChunkVa;
+
 STATIC UINT32 AllocChunks(VOID)
 {
   UINT32 i, units, total = 0, off = 0;
   UINT64 pa = 0;
 
+  if (mChunkVa != NULL) {
+    PhysFree (mChunkVa);
+    mChunkVa = NULL;
+  }
   for (i = 0; i < mNumReqs; i++) {
     units = mReq[i].NumUnits;
     if (mReq[i].NumUnitInfo & 4) {                 /* NUM_UNITS_IS_NUM_ACTIVE_PEERS */
@@ -232,7 +238,7 @@ STATIC UINT32 AllocChunks(VOID)
   if (total == 0) {
     return 0;
   }
-  if (total > MAX_MEM_TOTAL || PhysAlloc (total, &pa) == NULL) {
+  if (total > MAX_MEM_TOTAL || (mChunkVa = PhysAlloc (total, &pa)) == NULL) {
     Out ("  wmi: host memory for %u req(s), %u bytes: %a\r\n", mNumReqs, total,
          total > MAX_MEM_TOTAL ? "too big, not given" : "PhysAlloc failed");
     return 0;
@@ -395,4 +401,24 @@ BOOLEAN WmiSend(UINT32 CmdId, CONST VOID *Tlvs, UINT32 Len)
   *(UINT32 *)m = CmdId & 0xFFFFFF;
   CopyMem (m + 4, Tlvs, Len);
   return HtcWmiSend (m, Len + 4);
+}
+
+VOID WmiReset(VOID)
+{
+  if (mChunkVa != NULL) {
+    PhysFree (mChunkVa);
+    mChunkVa = NULL;
+  }
+  ZeroMem (mChunkPa, sizeof (mChunkPa));
+  ZeroMem (mChunkLen, sizeof (mChunkLen));
+  mInitSent = FALSE;
+  mReadyRx = FALSE;
+  ZeroMem (mSvcMap, sizeof (mSvcMap));
+  ZeroMem (mSvcExt, sizeof (mSvcExt));
+  mNumReqs = 0;
+  ZeroMem (mReq, sizeof (mReq));
+  ZeroMem (mMac, sizeof (mMac));
+  mEvents = 0;
+  mUnknown = 0;
+  mChanInfo = 0;
 }

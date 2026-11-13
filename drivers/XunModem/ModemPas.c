@@ -728,6 +728,80 @@ Out:
   FreePool (mdt);
 }
 
+VOID ModemShutdown(VOID)
+{
+  SMEM_PART_HDR *part;
+  SMP2P_HDR *in, *out;
+  UINT32 *mk = NULL, *sk = NULL, *ipa = NULL;
+  UINTN res = 0, st, t;
+
+  if (gSmemVa == 0 || gApcsVa == 0) {
+    if (EFI_ERROR (ModemMapInit ())) {
+      return;
+    }
+  }
+  Out ("  modem: graceful shutdown (CE/GLINK/SMP2P + TZ PAS)\r\n");
+  GlinkReset ();
+
+  part = SmemPartition (0, 1);
+  if (part != NULL) {
+    out = (SMP2P_HDR *)SmemPrivGet (part, SMEM_ITEM_SMP2P_OUT, NULL);
+    in  = (SMP2P_HDR *)SmemPrivGet (part, SMEM_ITEM_SMP2P_IN, NULL);
+    sk  = (in != NULL) ? Smp2pFind (in, "slave-kernel") : NULL;
+    if (out != NULL) {
+      if (in != NULL && in->Version == out->Version) {
+        out->Features[0] &= in->Features[0];
+      }
+      mk = Smp2pAddOut (out, "master-kernel", 0);
+      if (mk != NULL) {
+        *mk |= (1u << 3);                       /* SMP2P stop bit -> MPSS */
+        MemoryFence ();
+        Smp2pKick ();
+        for (t = 0; t < 12; t++) {              /* up to 300 ms for stop/shutdown-ack */
+          if (sk != NULL && (*sk & 0x88u) != 0) {
+            break;
+          }
+          gBS->Stall (25 * 1000);
+        }
+        Out ("  modem: smp2p stop sent (sk=%08x)\r\n", sk != NULL ? *sk : 0);
+      }
+      ipa = Smp2pFind (out, "ipa");
+      if (ipa != NULL) {
+        *ipa = 0;
+      }
+    }
+  }
+
+  res = 0;
+  st = Scm (SCM_FN (SCM_SVC_PIL, PIL_SHUTDOWN), SCM_ARGS (1), PAS_ID_MODEM, 0, 0, &res);
+  Out ("  modem: PAS shutdown(4): ret=%lx res=%lx\r\n", (UINT64)st, (UINT64)res);
+  res = 0;
+  st = Scm (SCM_FN (SCM_SVC_PIL, PIL_SHUTDOWN), SCM_ARGS (1), PAS_ID_IPA, 0, 0, &res);
+  Out ("  ipa: PAS shutdown(15): ret=%lx res=%lx\r\n", (UINT64)st, (UINT64)res);
+
+  if (mk != NULL) {
+    *mk &= ~(1u << 3);                          /* clear stop bit before next boot */
+    MemoryFence ();
+  }
+  if (sk != NULL) {
+    *sk = 0;                                    /* clear stale state after MPSS is halted */
+    MemoryFence ();
+  }
+  mSmpIn = NULL;
+  mSmpOut = NULL;
+  mIpaIn = NULL;
+  mIpaOut = NULL;
+  mIpaLast = 0xFFFFFFFF;
+  mIpaAnswers = 0;
+  gIpaFwRunning = FALSE;
+  gModemState = NULL;
+  CeStop ();
+  HttReset ();
+  HtcReset ();
+  WmiReset ();
+  WlfwReset ();
+}
+
 EFI_STATUS ModemPasTest(VOID)
 {
   EFI_FILE_PROTOCOL *root;
@@ -749,14 +823,14 @@ EFI_STATUS ModemPasTest(VOID)
   SmmuWlanMap ();
   PmicProbe ("before modem boot");             /* WLAN/RF rails, read-only (P4 diagnostics) */
   {
-    /* The modem must start cold: its GLINK/QRTR peer state from an earlier boot is gone. */
+    /* If item 435 already exists in persistent SMEM, shut down the prior MPSS/IPA cleanly first. */
     SMEM_PART_HDR *part = SmemPartition (0, 1);
-    UINT32 sz = 0;
+    UINT32 smSz = 0;
     Out ("  SMEM version %u, apps<->modem partition %p\r\n", SmemVersion (), part);
-    if (part != NULL && SmemPrivGet (part, SMEM_ITEM_SMP2P_IN, &sz) != NULL) {
-      Out ("  modem SMP2P item 435 already exists: the modem is running (UEFI \"Modem test\"?).\r\n"
-           "  Refusing. Power the phone off fully and boot Windows without the modem test.\r\n");
-      return EFI_ALREADY_STARTED;
+    if (part != NULL && SmemPrivGet (part, SMEM_ITEM_SMP2P_IN, &smSz) != NULL) {
+      Out ("  modem SMP2P item 435 already exists (%u bytes): shutting down prior MPSS/IPA session\r\n", smSz);
+      ModemShutdown ();
+      SmmuWlanMap ();
     }
   }
 

@@ -74,6 +74,7 @@ VOID WlanScanRequest(VOID);
 
 /* ---- modem bring-up, shared with XunModem's driver.c ---- */
 LONG_PTR ModemPasTest(VOID);                     /* boots the modem and runs the service loop */
+VOID ModemShutdown(VOID);                        /* gracefully stops CE/GLINK/SMP2P and MPSS/IPA */
 extern volatile BOOLEAN gModemStop;
 VOID LogOpen(VOID);
 VOID LogClose(VOID);

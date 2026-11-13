@@ -65,6 +65,13 @@ extern BOOLEAN gIpaFwRunning;                   /* ModemPas.c: GSI firmware enab
 
 /* ---- Windows only (port.c / ModemPas.c / driver.c) ---- */
 EFI_STATUS     ModemPasTest(VOID);
+VOID           ModemShutdown(VOID);
+VOID           GlinkReset(VOID);
+VOID           CeStop(VOID);
+VOID           WlfwReset(VOID);
+VOID           HtcReset(VOID);
+VOID           WmiReset(VOID);
+VOID           HttReset(VOID);
 EFI_STATUS     ModemMapInit(VOID);                /* SMEM, APCS IPC, GICD */
 VOID          *MapPhys(UINT64 Pa, UINTN Size, BOOLEAN Wc); /* Wc: Normal NC, else Device */
 VOID           UnmapPhys(VOID *Va, UINTN Size);

@@ -14,6 +14,10 @@ static EVT_WDF_DRIVER_DEVICE_ADD EvtDeviceAdd;
 static EVT_WDF_DRIVER_UNLOAD EvtDriverUnload;
 static EVT_WDF_DEVICE_PREPARE_HARDWARE EvtPrepareHardware;
 static EVT_WDF_DEVICE_RELEASE_HARDWARE EvtReleaseHardware;
+static EVT_WDF_DEVICE_D0_ENTRY EvtD0Entry;
+static EVT_WDF_DEVICE_D0_EXIT EvtD0Exit;
+
+static volatile LONG s_ModemActive = 0;
 
 /* TRUE if Path exists (and Delete: it is deleted). */
 static BOOLEAN FileProbe(PCWSTR Path, BOOLEAN Delete)
@@ -140,10 +144,46 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     return status;
 }
 
+static void StartModemWorker(XUN_WIFI_DEVICE *Dev)
+{
+    HANDLE h;
+    NTSTATUS status;
+
+    if (Dev == nullptr || Dev->ModemThread != nullptr) {
+        return;
+    }
+    gModemStop = FALSE;
+    InterlockedExchange(&s_ModemActive, 1);
+    status = PsCreateSystemThread(&h, THREAD_ALL_ACCESS, NULL, NULL, NULL, ModemThread, NULL);
+    if (NT_SUCCESS(status)) {
+        ObReferenceObjectByHandle(h, THREAD_ALL_ACCESS, *PsThreadType, KernelMode,
+                                  (PVOID *)&Dev->ModemThread, NULL);
+        ZwClose(h);
+    } else {
+        InterlockedExchange(&s_ModemActive, 0);
+        WLOG("PsCreateSystemThread: %08x\r\n", status);
+    }
+}
+
+static void StopModemAndShutdown(XUN_WIFI_DEVICE *Dev, PCSTR Reason)
+{
+    WLOG("%s\r\n", Reason);
+    if (Dev != nullptr && Dev->ModemThread != nullptr) {
+        gModemStop = TRUE;
+        KeWaitForSingleObject(Dev->ModemThread, Executive, KernelMode, FALSE, NULL);
+        ObDereferenceObject(Dev->ModemThread);
+        Dev->ModemThread = nullptr;
+    }
+    if (InterlockedExchange(&s_ModemActive, 0) != 0) {
+        ModemShutdown();
+    }
+}
+
 static VOID EvtDriverUnload(WDFDRIVER Driver)
 {
     UNREFERENCED_PARAMETER(Driver);
-    WLOG("unload\r\n");
+    StopModemAndShutdown(nullptr, "unload");
+    g_Wifi = nullptr;
     LogClose();
 }
 
@@ -174,6 +214,8 @@ static NTSTATUS EvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
     pnp.EvtDevicePrepareHardware = EvtPrepareHardware;
     pnp.EvtDeviceReleaseHardware = EvtReleaseHardware;
+    pnp.EvtDeviceD0Entry = EvtD0Entry;
+    pnp.EvtDeviceD0Exit = EvtD0Exit;
     WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnp);
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attrs, XUN_WIFI_DEVICE);
@@ -205,7 +247,6 @@ static NTSTATUS EvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
    in the background and scans wait for it (WlanOnReady). */
 static NTSTATUS EvtPrepareHardware(WDFDEVICE Device, WDFCMRESLIST Raw, WDFCMRESLIST Translated)
 {
-    HANDLE h;
     NTSTATUS status;
     XUN_WIFI_DEVICE *dev = WifiDev(Device);
 
@@ -216,33 +257,41 @@ static NTSTATUS EvtPrepareHardware(WDFDEVICE Device, WDFCMRESLIST Raw, WDFCMRESL
     if (!NT_SUCCESS(status)) {
         return status;
     }
+    dev->Prepared = TRUE;
     GuardTimerStart(Device);
-    if (dev->ModemThread == NULL) {
-        gModemStop = FALSE;
-        status = PsCreateSystemThread(&h, THREAD_ALL_ACCESS, NULL, NULL, NULL, ModemThread, NULL);
-        if (NT_SUCCESS(status)) {
-            ObReferenceObjectByHandle(h, THREAD_ALL_ACCESS, *PsThreadType, KernelMode, (PVOID *)&dev->ModemThread,
-                                      NULL);
-            ZwClose(h);
-        } else {
-            WLOG("PsCreateSystemThread: %08x\r\n", status);
-        }
+    StartModemWorker(dev);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS EvtD0Entry(WDFDEVICE Device, WDF_POWER_DEVICE_STATE PreviousState)
+{
+    XUN_WIFI_DEVICE *dev = WifiDev(Device);
+
+    WLOG("D0Entry prev=%u\r\n", (ULONG)PreviousState);
+    if (dev->Prepared && dev->ModemThread == nullptr) {
+        StartModemWorker(dev);
     }
     return STATUS_SUCCESS;
 }
 
-/* Device removal: stop the polling loop (the modem itself keeps running; reboot to retry). */
+static NTSTATUS EvtD0Exit(WDFDEVICE Device, WDF_POWER_DEVICE_STATE TargetState)
+{
+    XUN_WIFI_DEVICE *dev = WifiDev(Device);
+
+    WLOG("D0Exit target=%u\r\n", (ULONG)TargetState);
+    if (TargetState != WdfPowerDeviceD0) {
+        StopModemAndShutdown(dev, "D0Exit shutdown");
+    }
+    return STATUS_SUCCESS;
+}
+
+/* Device removal: stop CE/GLINK/SMP2P and shut down MPSS + IPA cleanly so reload never collides. */
 static NTSTATUS EvtReleaseHardware(WDFDEVICE Device, WDFCMRESLIST Translated)
 {
     XUN_WIFI_DEVICE *dev = WifiDev(Device);
 
     UNREFERENCED_PARAMETER(Translated);
-    WLOG("ReleaseHardware\r\n");
-    if (dev->ModemThread != NULL) {
-        gModemStop = TRUE;
-        KeWaitForSingleObject(dev->ModemThread, Executive, KernelMode, FALSE, NULL);
-        ObDereferenceObject(dev->ModemThread);
-        dev->ModemThread = NULL;
-    }
+    dev->Prepared = FALSE;
+    StopModemAndShutdown(dev, "ReleaseHardware");
     return STATUS_SUCCESS;
 }

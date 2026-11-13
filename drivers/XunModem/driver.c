@@ -11,7 +11,7 @@
 #include <wdf.h>
 #include "Modem.h"
 
-#define XUN_MODEM_VERSION "v0.13"
+#define XUN_MODEM_VERSION "v0.14"
 
 DRIVER_INITIALIZE DriverEntry;
 static EVT_WDF_DRIVER_DEVICE_ADD XunEvtDeviceAdd;
@@ -83,6 +83,16 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 static VOID XunEvtDriverUnload(WDFDRIVER Driver)
 {
     UNREFERENCED_PARAMETER(Driver);
+    if (g_Started) {
+        if (g_Thread != NULL) {
+            gModemStop = TRUE;
+            KeWaitForSingleObject(g_Thread, Executive, KernelMode, FALSE, NULL);
+            ObDereferenceObject(g_Thread);
+            g_Thread = NULL;
+        }
+        ModemShutdown();
+        g_Started = FALSE;
+    }
     LogPrint("unload\r\n");
     LogClose();
 }
@@ -134,6 +144,10 @@ static NTSTATUS XunEvtD0Exit(WDFDEVICE Device, WDF_POWER_DEVICE_STATE TargetStat
         KeWaitForSingleObject(g_Thread, Executive, KernelMode, FALSE, NULL);
         ObDereferenceObject(g_Thread);
         g_Thread = NULL;
+    }
+    if (g_Started) {
+        ModemShutdown();
+        g_Started = FALSE;
     }
     return STATUS_SUCCESS;
 }

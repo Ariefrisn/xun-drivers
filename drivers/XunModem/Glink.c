@@ -729,3 +729,49 @@ VOID GlinkQrtrSpike(UINTN Seconds, EFI_FILE_PROTOCOL *Root)
     }
   }
 }
+
+VOID GlinkReset(VOID)
+{
+  if (mDesc != NULL && mTx != NULL && mOpenSent) {
+    SendCmd (CMD_CLOSE, CHAN_LCID, 0);
+  }
+  while (mTxqHead != mTxqTail) {
+    FreePool (mTxq[mTxqHead % TXQ_LEN]);
+    mTxqHead++;
+  }
+  mDesc = NULL;
+  mTx = NULL;
+  mRx = NULL;
+  mRxLen = 0;
+  mFeatures = GLINK_FEATURES;
+  mRcid = 0;
+  mRemoteOpen = FALSE;
+  mOpenSent = FALSE;
+  mOpenAcked = FALSE;
+  mIntentsSent = FALSE;
+  mIntentReqSent = FALSE;
+  mNextIntent = 1;
+  mRiCount = 0;
+  ZeroMem (mRi, sizeof (mRi));
+  mAsmLen = 0;
+  mQrtrVer = 1;
+  mModemNode = QRTR_NODE_BCAST;
+  mHelloSent = FALSE;
+  mHelloRx = FALSE;
+  mAnnounced = FALSE;
+  mSrvCount = 0;
+  ZeroMem (mSrv, sizeof (mSrv));
+  mNowMs = 0;
+  mT0 = 0;
+  mIntentReqs = 0;
+  mIntentDenied = 0;
+  mRxMsgs = 0;
+  mTxMsgs = 0;
+  mOther = 0;
+  mResumes = 0;
+  mLastStatus = 0;
+  mTxqHead = 0;
+  mTxqTail = 0;
+  mTxqDrops = 0;
+  gModemState = NULL;
+}

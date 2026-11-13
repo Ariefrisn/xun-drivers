@@ -526,3 +526,23 @@ CONST CHAR8 *WlfwStep(VOID)
 {
   return mStep;
 }
+
+VOID WlfwReset(VOID)
+{
+  mNode = 0;
+  mPort = 0;
+  mPending = 0;
+  mMsaInd = FALSE;
+  mCapDone = FALSE;
+  mBdfStarted = FALSE;
+  mFwReady = FALSE;
+  mBoard = 0xFF;
+  if (mBdf != NULL) {
+    FreePool (mBdf);
+    mBdf = NULL;
+  }
+  mBdfLen = 0;
+  mBdfOff = 0;
+  mBdfSeg = 0;
+  Step ("not started");
+}
