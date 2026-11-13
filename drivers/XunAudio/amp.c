@@ -174,7 +174,8 @@ STATIC UINT32 AmpI2cXferBus(UINT32 SeIdx, UINT8 Addr, CONST UINT8 *W,
 
 UINT32 AmpI2cXfer(UINT8 Addr, CONST UINT8 *W, UINT32 WLen, UINT8 *R,
                   UINT32 RLen) {
-  return AmpI2cXferBus(1, Addr, W, WLen, R, RLen);
+  UINT32 seIdx = (Addr & 0x80u) ? 2u : 1u;
+  return AmpI2cXferBus(seIdx, (UINT8)(Addr & 0x7Fu), W, WLen, R, RLen);
 }
 
 STATIC CONST CHAR8 *Res(UINT32 R) {

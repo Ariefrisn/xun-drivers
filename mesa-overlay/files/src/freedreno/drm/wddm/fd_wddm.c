@@ -131,12 +131,16 @@ esc_stats(unsigned nr)
 static int
 esc(int fd, unsigned nr, void *data, unsigned size)
 {
+   static uint32_t large_bo_bm[65536 / 32];
    struct xungpu_escape *e;
-   /* XunGpu: the KMD never purges BOs, so GEM_MADVISE (called on every BO-cache put/get, ~11000/s once the
-    * ring cache worked) is answered here: retained = 1 */
+   /* Ring-cache BOs (<64 KB) call GEM_MADVISE ~11000/s: answer locally (retained=1).
+    * Larger BOs (>=64 KB) forward GEM_MADVISE to the KMD so BoShrink() can purge cached textures/surfaces. */
    if (nr == DRM_COMMAND_BASE + DRM_MSM_GEM_MADVISE && size >= sizeof(struct drm_msm_gem_madvise)) {
-      ((struct drm_msm_gem_madvise *)data)->retained = 1;
-      return 0;
+      struct drm_msm_gem_madvise *m = (struct drm_msm_gem_madvise *)data;
+      if (m->handle >= 65536 || !(large_bo_bm[m->handle >> 5] & (1u << (m->handle & 31)))) {
+         m->retained = 1;
+         return 0;
+      }
    }
    esc_stats(nr);
    if (esc_log > 0 && nr == DRM_COMMAND_BASE + DRM_MSM_GEM_NEW)
@@ -166,6 +170,15 @@ esc(int fd, unsigned nr, void *data, unsigned size)
       ret = e->ret;
       if (size)
          memcpy(data, e->data, size);
+      if (ret == 0 && nr == DRM_COMMAND_BASE + DRM_MSM_GEM_NEW && size >= sizeof(struct drm_msm_gem_new)) {
+         const struct drm_msm_gem_new *gn = (const struct drm_msm_gem_new *)data;
+         if (gn->handle < 65536) {
+            if (gn->size >= 65536)
+               large_bo_bm[gn->handle >> 5] |= (1u << (gn->handle & 31));
+            else
+               large_bo_bm[gn->handle >> 5] &= ~(1u << (gn->handle & 31));
+         }
+      }
    } else {
       ret = -EIO;
    }

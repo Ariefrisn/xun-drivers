@@ -126,6 +126,26 @@ NTSTATUS TaI2cWrite(UCHAR Addr, UCHAR Reg, UCHAR Value)
     return status;
 }
 
+NTSTATUS TaI2cWrite16(UCHAR Addr, UCHAR Reg, USHORT Value)
+{
+    TAUDIO_I2C t;
+    NTSTATUS status;
+
+    RtlZeroMemory(&t, sizeof(t));
+    t.Addr = Addr;
+    t.WLen = 3;
+    t.W[0] = Reg;
+    t.W[1] = (UCHAR)(Value >> 8);
+    t.W[2] = (UCHAR)(Value & 0xFF);
+    Lock();
+    status = TaIoctl(IOCTL_TAUDIO_I2C, &t, sizeof(t), &t, sizeof(t), NULL);
+    Unlock();
+    if (NT_SUCCESS(status) && t.Result != 0) {
+        status = STATUS_IO_DEVICE_ERROR;
+    }
+    return status;
+}
+
 NTSTATUS TaI2cRead(UCHAR Addr, UCHAR Reg, PUCHAR Buf, ULONG Len)
 {
     TAUDIO_I2C t;
@@ -150,6 +170,21 @@ NTSTATUS TaI2cRead(UCHAR Addr, UCHAR Reg, PUCHAR Buf, ULONG Len)
     }
     RtlCopyMemory(Buf, t.R, Len);
     return STATUS_SUCCESS;
+}
+
+NTSTATUS TaI2cRead16(UCHAR Addr, UCHAR Reg, PUSHORT Value)
+{
+    UCHAR buf[2] = { 0, 0 };
+    NTSTATUS status;
+
+    if (Value == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    status = TaI2cRead(Addr, Reg, buf, 2);
+    if (NT_SUCCESS(status)) {
+        *Value = (USHORT)(((USHORT)buf[0] << 8) | buf[1]);
+    }
+    return status;
 }
 
 VOID TaSleep(ULONG Ms)

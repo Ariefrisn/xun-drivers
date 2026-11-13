@@ -60,7 +60,7 @@ static VOID BoUnmapAll(TGPU_BO *Bo, PEPROCESS OnlyProcess)
     }
 }
 
-#define GEM_SOFT_LIMIT_BYTES    (512ULL * 1024 * 1024)
+#define GEM_SOFT_LIMIT_BYTES    (256ULL * 1024 * 1024)
 
 static ULONG g_GemFailCount;
 

@@ -6,7 +6,9 @@ VOID     TaClose(VOID);
 NTSTATUS TaWr(ULONGLONG Pa, ULONG Value);
 ULONG    TaRd(ULONGLONG Pa);
 NTSTATUS TaI2cWrite(UCHAR Addr, UCHAR Reg, UCHAR Value);
+NTSTATUS TaI2cWrite16(UCHAR Addr, UCHAR Reg, USHORT Value);
 NTSTATUS TaI2cRead(UCHAR Addr, UCHAR Reg, PUCHAR Buf, ULONG Len);
+NTSTATUS TaI2cRead16(UCHAR Addr, UCHAR Reg, PUSHORT Value);
 VOID     TaSleep(ULONG Ms);
 NTSTATUS TaGpr(ULONG Dst, ULONG Src, ULONG Opcode, BOOLEAN ApmHdr, const ULONG *Dw, ULONG N,
                ULONG *RspOpcode, ULONG *Rsp, ULONG MaxWords, ULONG TimeoutMs);

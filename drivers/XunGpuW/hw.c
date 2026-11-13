@@ -619,20 +619,20 @@ static BOOLEAN SmmuSetup(VOID)
     Wr(g_Smmu, SMMU_CB0 + 0x020, (ULONG)g_L1Pa.QuadPart);
     Wr(g_Smmu, SMMU_CB0 + 0x024, (ULONG)(g_L1Pa.QuadPart >> 32));   /* TTBR0, ASID 0 */
     /* TCR: T0SZ 32 = 4 GB GPU VA (walk starts at level 1, 4 entries), 4 KB granule,
-       non-cacheable walks, EPD1. TCR2: PASize 36-bit = this SMMU's OAS (IDR2 0x5511). */
+       non-cacheable walks, EPD1. TCR2: PASize 32-bit (<4 GB DDR bus port on SM6225). */
     Wr(g_Smmu, SMMU_CB0 + 0x030, 32 | (1u << 23));
-    Wr(g_Smmu, SMMU_CB0 + 0x010, 1);
+    Wr(g_Smmu, SMMU_CB0 + 0x010, 0);
     Wr(g_Smmu, SMMU_CB0 + 0x038, 0x44);                  /* MAIR0: attr0 = Normal non-cacheable */
     Wr(g_Smmu, SMMU_CB0 + 0x03C, 0);
     __dsb(_ARM64_BARRIER_SY);
     if (g_UseSmmu) {
-        if (scr0 & 1u) {
-            Wr(g_Smmu, 0x000, scr0 & ~1u);               /* clear CLIENTPD so stage-1 translates */
+        if (scr0 & (1u | (1u << 21))) {
+            Wr(g_Smmu, 0x000, scr0 & ~(1u | (1u << 21))); /* clear CLIENTPD & SMCFCFG */
         }
         TlbFlush();
         Wr(g_Smmu, SMMU_CB0 + 0x000, 0x65);              /* SCTLR: CFIE | CFRE | AFE | M (abort on fault) */
         Wr(g_Smmu, 0xC00, 0);                            /* S2CR0 -> CB0 */
-        Wr(g_Smmu, 0x800, (1u << 31) | (0x7FFFu << 16)); /* SMR0: match all GPU stream IDs */
+        Wr(g_Smmu, 0x800, (1u << 31) | (1u << 16));      /* SMR0: SID 0 mask 1 */
         g_SmmuOn = TRUE;
         TlbFlush();
     } else {
@@ -802,7 +802,7 @@ PMDL TgAllocPages(SIZE_T Size, BOOLEAN PreferContig, PULONGLONG Iova, PULONGLONG
     }
 
     lo.QuadPart = 0;
-    hi.QuadPart = 0xFFFFFFFFFULL;                        /* 36-bit SMMU OAS = 64 GB */
+    hi.QuadPart = 0xFFFFFFFFULL;                         /* <4 GB physical pages (v0.14: >4 GB hangs BIMC port) */
     skip.QuadPart = 0;
     mdl = MmAllocatePagesForMdlEx(lo, hi, skip, Size, MmWriteCombined, MM_ALLOCATE_FULLY_REQUIRED);
     if (mdl == NULL) {
@@ -855,7 +855,7 @@ static BOOLEAN KBufAlloc(KBUF *B, SIZE_T Size)
         return B->Contig;
     }
     lo.QuadPart = 0;
-    hi.QuadPart = 0xFFFFFFFFFULL;
+    hi.QuadPart = 0xFFFFFFFFULL;                         /* <4 GB physical pages so CP/SQE fetch never wedges */
     skip.QuadPart = 0;
     B->Mdl = MmAllocatePagesForMdlEx(lo, hi, skip, B->Size, MmWriteCombined, MM_ALLOCATE_FULLY_REQUIRED);
     if (B->Mdl == NULL) {
