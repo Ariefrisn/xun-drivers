@@ -354,6 +354,17 @@ STATIC UINT32 BuildAssocReq(UINT8 *F, UINT32 Max)
     *p++ = 1; *p++ = 0; *p++ = 0x00; *p++ = 0x0F; *p++ = 0xAC; *p++ = mReq.Akm;
     *p++ = 0; *p++ = 0;                                                         /* RSN caps */
   }
+  if (FindIe (mReq.Body, mReq.BodyLen, 45) != NULL && (UINT32)(p - F) + 28 <= Max) {
+    STATIC CONST UINT8 ht[28] = {
+      45, 26,
+      0x2C, 0x01,                                    /* HT caps: 20 MHz, no SMPS, SGI-20, Rx STBC 1 */
+      0x1B,                                          /* A-MPDU params: max 64K, 8 us */
+      0xFF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* MCS 0-7 (1x1) */
+      0, 0, 0, 0, 0, 0, 0
+    };
+    CopyMem (p, ht, sizeof (ht));
+    p += sizeof (ht);
+  }
   if (mReq.ExtraIeLen != 0 && (UINT32)(p - F) + mReq.ExtraIeLen <= Max) {
     CopyMem (p, mReq.ExtraIe, mReq.ExtraIeLen);
     p += mReq.ExtraIeLen;
@@ -384,7 +395,15 @@ STATIC VOID Teardown(VOID)
 
 STATIC VOID Fail(LONG Status)
 {
-  Out ("  t=%u.%03u assoc: failed (%d) in state %u\r\n", T, Status, mState);
+  UINT8 rates[16];
+  UINT32 n = ApRates (rates), i;
+
+  Out ("  t=%u.%03u assoc: failed (%d) in state %u (req %u B, resp %u B, rates %u:", T, Status, mState,
+       mAssocReqLen, mAssocRespLen, n);
+  for (i = 0; i < n; i++) {
+    Out (" %02x", rates[i]);
+  }
+  Out (")\r\n");
   Teardown ();
   WlanOnAssocResult (Status, 0, mAssocReq + 24, mAssocReqLen > 24 ? mAssocReqLen - 24 : 0,
                      mAssocResp + 24, mAssocRespLen > 24 ? mAssocRespLen - 24 : 0);
