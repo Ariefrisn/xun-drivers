@@ -93,7 +93,11 @@ if exist "C:\xun\fw\image\modem.mdt" if exist "%DRV%\XunWifi\XunWifi.inf" (
   )
 )
 
-for %%d in (XunAudio XunSpeaker) do (
+if exist "%~dp0bt_fw" xcopy /e /i /y /q "%~dp0bt_fw" C:\xun\fw\bt >> "%L%" 2>&1
+if exist "%DRV%\XunBluetooth\bt_fw" xcopy /e /i /y /q "%DRV%\XunBluetooth\bt_fw" C:\xun\fw\bt >> "%L%" 2>&1
+if exist "%~dp0fw\bt" xcopy /e /i /y /q "%~dp0fw\bt" C:\xun\fw\bt >> "%L%" 2>&1
+
+for %%d in (XunAudio XunSpeaker XunBluetooth) do (
   if exist "%DRV%\%%d\%%d.inf" (
     "%DEVCON%" find Root\%%d 2>nul | findstr /i "ROOT\\%%d" >nul
     if errorlevel 1 (

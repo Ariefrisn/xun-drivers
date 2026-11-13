@@ -43,7 +43,7 @@
  */
 #include "driver.h"
 
-#define XUN_RPM_VERSION   "v0.9"
+#define XUN_RPM_VERSION   "v0.10"
 
 #define MSG_RAM_PA          0x045F0000ULL
 #define MSG_RAM_SIZE        0x7000
@@ -84,7 +84,11 @@
 #define RPM_RES_LDOA        0x616F646Cu     /* "ldoa" */
 #define RPM_KEY_SWEN        0x6E657773u     /* "swen" */
 #define RPM_KEY_UV          0x00007675u     /* "uv" */
+#define L9_UV               1800000
 #define L14_UV              1800000
+#define L16_UV              1800000
+#define L17_UV              1304000
+#define L23_UV              3312000
 #define RPM_RES_RWLC        0x636C7772u     /* "rwlc" */
 #define RPM_RES_RWLM        0x6D6C7772u     /* "rwlm" */
 #define LPI_LEVEL           0x180
@@ -405,6 +409,18 @@ static VOID PublishIpaClock(ULONG Khz)
     LogPrint("published IpaClockKhz=%u (volatile State key): %08x\n", Khz, st);
 }
 
+/* Votes voltage and software-enable on a PM6125 LDOA rail for active and sleep sets. */
+static VOID VoteLdoa(PDEVICE_CONTEXT Ctx, ULONG LdoId, ULONG Microvolts)
+{
+    ULONG set;
+    for (set = RPM_ACTIVE_SET; set <= RPM_SLEEP_SET; set++) {
+        LogPrint("rpm: L%u %u uV (set %u): %s\n", LdoId, Microvolts, set,
+                 RpmWrite(Ctx, set, RPM_RES_LDOA, LdoId, RPM_KEY_UV, Microvolts) ? "OK" : "FAILED");
+        LogPrint("rpm: L%u enable (set %u): %s\n", LdoId, set,
+                 RpmWrite(Ctx, set, RPM_RES_LDOA, LdoId, RPM_KEY_SWEN, 1) ? "OK" : "FAILED");
+    }
+}
+
 static VOID Link(PDEVICE_CONTEXT Ctx)
 {
     PHYSICAL_ADDRESS pa;
@@ -451,12 +467,18 @@ static VOID Link(PDEVICE_CONTEXT Ctx)
         }
     }
     if (ok && FileExists(L"\\??\\C:\\xun\\rpm.l14")) {
-        ULONG set;
-        for (set = RPM_ACTIVE_SET; set <= RPM_SLEEP_SET; set++) {
-            LogPrint("rpm: L14 %u uV (set %u): %s\n", L14_UV, set,
-                     RpmWrite(Ctx, set, RPM_RES_LDOA, 14, RPM_KEY_UV, L14_UV) ? "OK" : "FAILED");
-            LogPrint("rpm: L14 enable (set %u): %s\n", set,
-                     RpmWrite(Ctx, set, RPM_RES_LDOA, 14, RPM_KEY_SWEN, 1) ? "OK" : "FAILED");
+        VoteLdoa(Ctx, 14, L14_UV);
+    }
+    if (ok && !FileExists(L"\\??\\C:\\xun\\nobt") && !FileExists(L"\\??\\C:\\xun\\rpm.nobt")) {
+        static const struct { ULONG Id; ULONG Uv; } kBtLdos[] = {
+            { 9,  L9_UV },
+            { 16, L16_UV },
+            { 17, L17_UV },
+            { 23, L23_UV },
+        };
+        ULONG i;
+        for (i = 0; i < ARRAYSIZE(kBtLdos); i++) {
+            VoteLdoa(Ctx, kBtLdos[i].Id, kBtLdos[i].Uv);
         }
     }
     if (ok && FileExists(L"\\??\\C:\\xun\\rpm.lpi")) {

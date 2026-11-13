@@ -22,7 +22,7 @@ jobs:
         shell: pwsh
         run: |
           $failed = @()
-          foreach ($name in @("XunTouch", "XunBattery", "XunDisplay", "XunButtons", "XunModem", "XunWifi", "XunCpu", "XunRpm", "XunBacklight", "XunGpu", "XunGpuW", "XunAudio", "XunSpeaker")) {
+          foreach ($name in @("XunTouch", "XunBattery", "XunDisplay", "XunButtons", "XunModem", "XunWifi", "XunCpu", "XunRpm", "XunBacklight", "XunGpu", "XunGpuW", "XunAudio", "XunSpeaker", "XunBluetooth")) {
             Write-Host "=== Building $name ==="
             msbuild "drivers\$name\$name.vcxproj" /p:Configuration=Release /p:Platform=ARM64 /p:ApiValidator_Enable=false /m /v:minimal
             if ($LASTEXITCODE) { $failed += $name; Write-Host "::error::$name build failed" }
@@ -66,7 +66,7 @@ jobs:
           # Windows on the phone boots with its clock at 2022: keep the cert valid from 2015
           $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=xun-woa test signing" -CertStoreLocation Cert:\CurrentUser\My -NotBefore (Get-Date "2015-01-01") -NotAfter (Get-Date "2045-01-01")
 
-          foreach ($name in @("XunTouch", "XunBattery", "XunDisplay", "XunButtons", "XunModem", "XunWifi", "XunCpu", "XunRpm", "XunBacklight", "XunGpu", "XunGpuW", "XunAudio", "XunSpeaker")) {
+          foreach ($name in @("XunTouch", "XunBattery", "XunDisplay", "XunButtons", "XunModem", "XunWifi", "XunCpu", "XunRpm", "XunBacklight", "XunGpu", "XunGpuW", "XunAudio", "XunSpeaker", "XunBluetooth")) {
             $out = "out\$name"
             New-Item -ItemType Directory -Force $out | Out-Null
             Copy-Item "drivers\$name\ARM64\Release\$name.sys" $out
@@ -93,6 +93,7 @@ jobs:
             }
             if ($name -eq "XunModem") { Copy-Item "tools\deploy\install-modem.cmd", "tools\deploy\copy-log-modem.cmd" $out }
             if ($name -eq "XunWifi") { Copy-Item "tools\deploy\install-wifi.cmd", "tools\deploy\copy-log-wifi.cmd" $out }
+            if ($name -eq "XunBluetooth") { Copy-Item "tools\deploy\install-bluetooth.cmd", "tools\deploy\copy-log-bluetooth.cmd" $out }
             Get-ChildItem $out | Select-Object Name, Length | Format-Table -AutoSize
           }
 
@@ -178,6 +179,11 @@ jobs:
         with:
           name: XunSpeaker-arm64
           path: out/XunSpeaker
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XunBluetooth-arm64
+          path: out/XunBluetooth
 
       - uses: actions/upload-artifact@v4
         with:

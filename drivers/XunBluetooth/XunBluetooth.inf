@@ -1,0 +1,68 @@
+;
+; XunBluetooth.inf - Redmi Pad SE (xun, SM6225 + WCN3990/WCN3950 BT UART)
+; Lower filter under inbox BthMini.sys (Microsoft Bluetooth Extensible Transport DDI)
+;
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = Bluetooth
+ClassGuid   = {e0cbf06c-cd8b-4647-bb8a-263b43f0f974}
+Provider    = %ManufacturerName%
+DriverVer   = 01/01/2026,1.0.0.0
+CatalogFile = XunBluetooth.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,
+
+[SourceDisksFiles]
+XunBluetooth.sys = 1
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTARM64
+
+[Standard.NTARM64]
+%XunBluetooth.DeviceDesc% = XunBluetooth_Device.NT, Root\XunBluetooth
+
+[XunBluetooth_Device.NT]
+Include   = bth.inf
+Needs     = BthMini.NT
+CopyFiles = XunBluetooth_CopyFiles
+
+[XunBluetooth_CopyFiles]
+XunBluetooth.sys
+
+[XunBluetooth_Device.NT.HW]
+Include = bth.inf
+Needs   = BthMini.NT.HW
+AddReg  = XunBluetooth_HW.AddReg
+
+[XunBluetooth_HW.AddReg]
+HKR,,"LowerFilters",0x00010000,"XunBluetooth"
+
+[XunBluetooth_Device.NT.Services]
+Include    = bth.inf
+Needs      = BthMini.NT.Services
+AddService = XunBluetooth, , XunBluetooth_Service_Inst
+
+[XunBluetooth_Service_Inst]
+DisplayName   = %XunBluetooth.ServiceDesc%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %13%\XunBluetooth.sys
+
+[XunBluetooth_Device.NT.Wdf]
+KmdfService = XunBluetooth, XunBluetooth_wdfsect
+
+[XunBluetooth_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+ManufacturerName         = "XUN WOA"
+DiskName                 = "XunBluetooth Driver Disk"
+XunBluetooth.DeviceDesc  = "Redmi Pad SE (xun) Qualcomm WCN3990 Bluetooth"
+XunBluetooth.ServiceDesc = "Redmi Pad SE Qualcomm H4/QUP UART Bluetooth Filter"
