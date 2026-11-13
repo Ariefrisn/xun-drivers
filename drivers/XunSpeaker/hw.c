@@ -254,21 +254,50 @@ static BOOLEAN g_AmpInit;
 static BOOLEAN g_AmpProbed;
 static UCHAR   g_SipaMaskSe1;              /* bitmask of active 0x28/0x29/0x2B on SE1 */
 static UCHAR   g_FsMask;                   /* bitmask of 0x34/0x35 on SE1 (bits 0..1) and SE2 (bits 2..3) */
-static USHORT  g_FsRev[4];
+static USHORT  g_FsDevId[4];
+
+static NTSTATUS Fs1815UpdateBits(UCHAR Addr, UCHAR Reg, UCHAR Shift, UCHAR Len, USHORT Val)
+{
+    USHORT mask, cur = 0, next;
+    NTSTATUS st;
+
+    if (Len >= 16) {
+        return TaI2cWrite16(Addr, Reg, Val);
+    }
+    mask = (USHORT)(((1u << Len) - 1u) << Shift);
+    st = TaI2cRead16(Addr, Reg, &cur);
+    if (!NT_SUCCESS(st)) {
+        return st;
+    }
+    next = (USHORT)((cur & ~mask) | ((Val << Shift) & mask));
+    return TaI2cWrite16(Addr, Reg, next);
+}
 
 static NTSTATUS Fs1815InitOne(UCHAR Addr)
 {
-    static const USHORT initRegs[][2] = {
-        { 0x00, 0x0000 }, { 0x16, 0xFF00 }, { 0x17, 0x0300 },
-        { 0xA1, 0x1C92 }, { 0xA2, 0x7F54 }, { 0xA6, 0x037F },
-        { 0xAA, 0x0F55 }, { 0xAB, 0x3360 }, { 0xAC, 0x0110 },
-        { 0xB8, 0x0800 }, { 0xB9, 0xFFFF }, { 0xBA, 0xFFFF },
-        /* Music scene (fs1815.fsm scene 0x0001) */
-        { 0xA4, 0x1B58 }, { 0xAD, 0x8FBF }, { 0xAE, 0x1232 },
-        { 0xAF, 0x1893 }, { 0xB0, 0x9080 }, { 0xB1, 0x8260 },
-        { 0xB2, 0x4120 }, { 0xB3, 0x0001 }
+    typedef struct _FS_REG_ENTRY {
+        UCHAR  Reg;
+        UCHAR  Shift;
+        UCHAR  Len;
+        USHORT Val;
+    } FS_REG_ENTRY;
+    /* Exact [COMMON] table decoded from xun vendor/firmware/fs1815.fsm */
+    static const FS_REG_ENTRY commonRegs[] = {
+        { 0x11, 0, 16, 0x0001 }, { 0x3E, 0, 16, 0x8500 }, { 0x3F, 0, 16, 0x8110 },
+        { 0x4C, 0, 16, 0x7008 }, { 0x2A, 0, 16, 0x0030 }, { 0x58, 0, 16, 0x827A },
+        { 0x59, 0, 16, 0xD821 }, { 0x5A, 0, 16, 0xD841 }, { 0x5B, 0, 16, 0xD07B },
+        { 0x5C, 0, 16, 0xD800 }, { 0x88, 0, 16, 0xA000 }, { 0x89, 0, 16, 0x0032 },
+        { 0xBC, 4,  5, 0x0002 }, { 0x4C, 3,  1, 0x0000 }, { 0x22, 0, 16, 0x0028 },
+        { 0x23, 0, 16, 0x0027 }, { 0xB8, 0, 16, 0x0002 }, { 0x5D, 0, 16, 0xA001 }
     };
-    USHORT tmp = 0, r19 = 0;
+    /* Exact [SCENE 0x0001] (Music) table from fs1815.fsm */
+    static const FS_REG_ENTRY sceneRegs[] = {
+        { 0x20,  0, 16, 0x07C2 }, { 0x18,  0, 16, 0x000A },
+        { 0x3F, 15,  1, 0x0000 }, { 0xBC, 15,  1, 0x0000 },
+        { 0x1F,  0, 16, 0xCA91 }, { 0x58,  0, 16, 0x821A },
+        { 0x59, 12,  4, 0x0000 }
+    };
+    USHORT tmp = 0, ch;
     ULONG i;
     NTSTATUS st;
 
@@ -279,16 +308,26 @@ static NTSTATUS Fs1815InitOne(UCHAR Addr)
     (VOID)TaI2cRead16(Addr, 0x10, &tmp);
     TaSleep(15);
     st = TaI2cWrite16(Addr, 0x10, 0x0001);                  /* enter config power-down */
-    (VOID)TaI2cRead16(Addr, 0x0E, &tmp);
-    (VOID)TaI2cWrite16(Addr, 0x14, 0x0018);
-    (VOID)TaI2cWrite16(Addr, 0x1F, 0xCA91);                 /* unlock private regs */
-    if (NT_SUCCESS(TaI2cRead16(Addr, 0x19, &r19))) {
-        USHORT ch = ((Addr & 0x7Fu) == 0x34u) ? 0x0009u : 0x000Au;
-        (VOID)TaI2cWrite16(Addr, 0x19, (USHORT)((r19 & ~0x007Fu) | ch));
+    for (i = 0; i < 5; i++) {
+        tmp = 0;
+        if (NT_SUCCESS(TaI2cRead16(Addr, 0x0E, &tmp)) && (tmp == 0x0003u || tmp == 0x0300u)) {
+            break;
+        }
+        TaSleep(2);
     }
-    for (i = 0; i < ARRAYSIZE(initRegs); i++) {
-        (VOID)TaI2cWrite16(Addr, (UCHAR)initRegs[i][0], initRegs[i][1]);
+    (VOID)TaI2cWrite16(Addr, 0x14, 0x0018);                 /* dev_mode << 1 */
+    for (i = 0; i < ARRAYSIZE(commonRegs); i++) {
+        (VOID)Fs1815UpdateBits(Addr, commonRegs[i].Reg, commonRegs[i].Shift,
+                               commonRegs[i].Len, commonRegs[i].Val);
     }
+    for (i = 0; i < ARRAYSIZE(sceneRegs); i++) {
+        (VOID)Fs1815UpdateBits(Addr, sceneRegs[i].Reg, sceneRegs[i].Shift,
+                               sceneRegs[i].Len, sceneRegs[i].Val);
+    }
+    /* SE1 (0x34/0x35) = 0x0A, SE2 (0x80|0x34/0x35) = 0x09 per fs1815.fsm */
+    ch = (Addr & 0x80u) ? 0x0009u : 0x000Au;
+    (VOID)Fs1815UpdateBits(Addr, 0x19, 0, 5, ch);
+    (VOID)TaI2cWrite16(Addr, 0x5A, 0xF8E0);
     (VOID)TaI2cWrite16(Addr, 0x1F, 0x0000);                 /* lock private regs */
     st = TaI2cWrite16(Addr, 0x06, 0xFF00);                  /* 0 dB volume */
     return st;
@@ -324,11 +363,11 @@ static VOID AmpOn(BOOLEAN On)
         }
         for (k = 0; k < ARRAYSIZE(fsAddrs); k++) {
             USHORT devId = 0, revId = 0;
-            if (NT_SUCCESS(TaI2cRead16(fsAddrs[k], 0x01, &devId)) ||
+            if (NT_SUCCESS(TaI2cRead16(fsAddrs[k], 0x02, &devId)) ||
                 NT_SUCCESS(TaI2cRead16(fsAddrs[k], 0x03, &revId))) {
                 (VOID)TaI2cRead16(fsAddrs[k], 0x03, &revId);
                 g_FsMask |= (UCHAR)(1u << k);
-                g_FsRev[k] = revId;
+                g_FsDevId[k] = devId;
                 LogPrint("amp detect SE%u fs1815@0x%02x id=%04x rev=%04x\r\n",
                          (fsAddrs[k] & 0x80u) ? 2u : 1u, fsAddrs[k] & 0x7Fu, devId, revId);
             }
@@ -359,7 +398,7 @@ static VOID AmpOn(BOOLEAN On)
             if (!g_AmpInit) {
                 status = Fs1815InitOne(fsAddrs[k]);
             }
-            if ((g_FsRev[k] & 0xFFu) == 0x11u) {
+            if ((g_FsDevId[k] & 0xFFu) == 0x11u) {
                 (VOID)TaI2cWrite16(fsAddrs[k], 0xBC, 0x9433);
             }
             (VOID)TaI2cWrite16(fsAddrs[k], 0x11, 0x008F);   /* Boost/PLL/Class-D enable */
