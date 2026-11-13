@@ -76,6 +76,11 @@ static BOOLEAN IsRotationLandscape(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION R)
     return R == D3DKMDT_VPPR_ROTATE90 || R == D3DKMDT_VPPR_ROTATE270;
 }
 
+ULONG DispPathRotation(VOID)
+{
+    return (ULONG)g_PathRotation;
+}
+
 static VOID MdpScanFrom(ULONG Pa, ULONG Stride, BOOLEAN Flip)
 {
     ULONG op = (g_FbOpMode & ~MDP_FLIP_180) | (Flip ? MDP_FLIP_180 : 0);
@@ -528,7 +533,7 @@ NTSTATUS DispSetSourceAddress(const DXGKARG_SETVIDPNSOURCEADDRESS *A)
         InterlockedExchange(&g_ScanDirty, 1);
     }
     InterlockedExchange(&g_FlipPending, 1);
-    if (++count <= 60) {
+    if (++count <= 500) {
         LogPrint("SetVidPnSourceAddress: src %u alloc %p seg %u pa %llx flags %x%s\n", A->VidPnSourceId, A->hAllocation,
                  A->PrimarySegment, A->PrimaryAddress.QuadPart, A->Flags.Value, direct ? " (direct scanout)" : "");
     }

@@ -52,6 +52,40 @@ static VOID Blt(const TG_CMD *C)
         GartUnmapVa(d, md);
         return;
     }
+    if (C->Src->Desc.width == C->Dst->Desc.height && C->Src->Desc.height == C->Dst->Desc.width &&
+        C->Dst->Desc.width > 0 && C->Dst->Desc.height > 0) {
+        ULONG dstW = C->Dst->Desc.width, dstH = C->Dst->Desc.height;
+        ULONG srcPitch = C->Src->Desc.pitch, dstPitch = C->Dst->Desc.pitch;
+        ULONG rot = DispPathRotation();
+        ULONG dx_u, dy_u;
+        RECT fullR;
+
+        if (rot == D3DKMDT_VPPR_ROTATE90) {
+            for (dy_u = 0; dy_u < dstH; dy_u++) {
+                PULONG dstRow = (PULONG)(d + (SIZE_T)dy_u * dstPitch);
+                const UCHAR *srcCol = s + (SIZE_T)dy_u * 4;
+                for (dx_u = 0; dx_u < dstW; dx_u++) {
+                    dstRow[dx_u] = *(const ULONG *)(srcCol + (SIZE_T)(dstW - 1 - dx_u) * srcPitch);
+                }
+            }
+        } else {
+            for (dy_u = 0; dy_u < dstH; dy_u++) {
+                PULONG dstRow = (PULONG)(d + (SIZE_T)dy_u * dstPitch);
+                const UCHAR *srcCol = s + (SIZE_T)(dstH - 1 - dy_u) * 4;
+                for (dx_u = 0; dx_u < dstW; dx_u++) {
+                    dstRow[dx_u] = *(const ULONG *)(srcCol + (SIZE_T)dx_u * srcPitch);
+                }
+            }
+        }
+        GartUnmapVa(s, ms);
+        GartUnmapVa(d, md);
+        fullR.left = 0;
+        fullR.top = 0;
+        fullR.right = (LONG)dstW;
+        fullR.bottom = (LONG)dstH;
+        DispPresentRects(C->Dst, &fullR, 1);
+        return;
+    }
     for (i = 0; i < n; i++) {
         RECT r = C->NumRects ? C->Rects[i] : C->DstRect;
         LONG y, w;

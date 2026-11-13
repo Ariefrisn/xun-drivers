@@ -19,7 +19,7 @@
 #include "msm_drm_k.h"
 #include "xungpu_escape.h"
 
-#define TGPU_VERSION        "v0.45.9"
+#define TGPU_VERSION        "v0.45.10"
 #define TGPU_POOL_TAG       'WupG'
 
 /* ---- log.c ---- */
@@ -149,6 +149,7 @@ VOID     EngKickScanout(VOID);
 #define TGPU_REFRESH_DEFAULT 90
 
 ULONG    DispRefresh(VOID);
+ULONG    DispPathRotation(VOID);
 NTSTATUS DispStart(PDXGKRNL_INTERFACE Dxgk);
 VOID     DispSurveyMdp(VOID);
 VOID     DispStop(VOID);
