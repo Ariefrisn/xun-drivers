@@ -740,17 +740,10 @@ static NTSTATUS APIENTRY TgDescribeAllocation(const HANDLE hAdapter, DXGKARG_DES
     A->RefreshRate.Denominator = 1;
     A->PrivateDriverFormatAttribute = 0;
     A->Rotation = D3DDDI_ROTATION_IDENTITY;
-    if (al->Desc.kind == XUNGPU_ALLOC_SHAREDPRIMARY &&
-        al->Desc.reserved[0] >= D3DDDI_ROTATION_IDENTITY &&
-        al->Desc.reserved[0] <= D3DDDI_ROTATION_270) {
-        A->Rotation = (D3DDDI_ROTATION)al->Desc.reserved[0];
-    } else if (al->Desc.flags & XUNGPU_ALLOC_F_PRIMARY) {
+    if (al->Desc.flags & XUNGPU_ALLOC_F_PRIMARY) {
         ULONG pathRot = DispPathRotation();
         if (pathRot >= D3DDDI_ROTATION_IDENTITY && pathRot <= D3DDDI_ROTATION_270) {
             A->Rotation = (D3DDDI_ROTATION)pathRot;
-        } else if (al->Desc.reserved[0] >= D3DDDI_ROTATION_IDENTITY &&
-                   al->Desc.reserved[0] <= D3DDDI_ROTATION_270) {
-            A->Rotation = (D3DDDI_ROTATION)al->Desc.reserved[0];
         }
     }
     if (++count <= 500) {
@@ -776,7 +769,6 @@ static NTSTATUS APIENTRY TgGetStandardAllocationDriverData(const HANDLE hAdapter
         d.format = A->pCreateSharedPrimarySurfaceData->Format;
         d.vidpn = A->pCreateSharedPrimarySurfaceData->VidPnSourceId;
         d.flags = XUNGPU_ALLOC_F_PRIMARY;
-        d.reserved[0] = (ULONG)A->pCreateSharedPrimarySurfaceData->Rotation;
         break;
     case D3DKMDT_STANDARDALLOCATION_SHADOWSURFACE:
         d.width = A->pCreateShadowSurfaceData->Width;
