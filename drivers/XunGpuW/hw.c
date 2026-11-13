@@ -162,6 +162,13 @@ static VOID PowerCycleIfOn(VOID)
     LogPrint("  GPU already powered (GX %08x CX %08x): power cycling\n", Rd(g_GpuCc, 0x100c), Rd(g_GpuCc, 0x1540));
     if (Rd(g_GpuCc, 0x100c) & GDSC_PWR_ON) {
         Wr(g_Gpu, 4 * 0x808, 0);                         /* CP_SQE_CNTL: stop */
+        /* Halt RBBM->GBIF and GBIF client/arbiter before cutting clocks/GX (A610 quirk: no SW_RESET) */
+        Wr(g_Gpu, 4 * 0x16, 1u);
+        (VOID)Poll(g_Gpu, 4 * 0x17, 1u, 1u, 1000);
+        Wr(g_Gpu, 4 * 0x3c45, 1u);
+        (VOID)Poll(g_Gpu, 4 * 0x3c46, 1u, 1u, 1000);
+        Wr(g_Gpu, 4 * 0x3c45, 3u);
+        (VOID)Poll(g_Gpu, 4 * 0x3c46, 3u, 3u, 1000);
     }
     Rmw(g_GpuCc, 0x1054, CBCR_EN, 0);                    /* gx_gfx3d off */
     Rmw(g_GpuCc, 0x100c, 0, GDSC_COLLAPSE);              /* GX GDSC collapse */
@@ -619,11 +626,12 @@ static BOOLEAN SmmuSetup(VOID)
     Wr(g_Smmu, SMMU_CB0 + 0x004, (Rd(g_Smmu, SMMU_CB0 + 0x004) & ~0x3FFu) | 0x30Bu); /* DT qcom,actlr */
     Wr(g_Smmu, SMMU_CB0 + 0x020, (ULONG)g_L1Pa.QuadPart);
     Wr(g_Smmu, SMMU_CB0 + 0x024, (ULONG)(g_L1Pa.QuadPart >> 32));   /* TTBR0, ASID 0 */
-    /* TCR: T0SZ=28 (36-bit VA matching IDR2.IAS=1 & qcom,iova-width=0x24),
-       SL0=1 (walk starts at level 1 matching L3For), 4 KB granule, non-cacheable walks, EPD1.
-       TCR2: PASize=1 (36-bit PA matching IDR2.OAS=1), preserve hardware SEP bits. */
-    Wr(g_Smmu, SMMU_CB0 + 0x030, 28u | (1u << 6) | (1u << 23));
-    Wr(g_Smmu, SMMU_CB0 + 0x010, (Rd(g_Smmu, SMMU_CB0 + 0x010) & ~0x7u) | 1u);
+    /* TCR: T0SZ=28 (36-bit VA matching IDR2.IAS=1 & qcom,iova-width=0x24 -> starts at L1),
+       4 KB granule, non-cacheable walks, EPD1. No bit-6 RES0 in AArch64 VA64 format.
+       TCR2: PASize=1 (36-bit PA matching IDR2.OAS=1), SEP=7 (SEP_UPSTREAM) so VA>=0x80000000
+       is zero-extended instead of sign-extended into TTBR1. */
+    Wr(g_Smmu, SMMU_CB0 + 0x030, 28u | (1u << 23));
+    Wr(g_Smmu, SMMU_CB0 + 0x010, (7u << 15) | 1u);
     Wr(g_Smmu, SMMU_CB0 + 0x038, 0x44);                  /* MAIR0: attr0 = Normal non-cacheable */
     Wr(g_Smmu, SMMU_CB0 + 0x03C, 0);
     __dsb(_ARM64_BARRIER_SY);

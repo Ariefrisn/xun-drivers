@@ -326,7 +326,7 @@ static NTSTATUS Fs1815InitOne(UCHAR Addr)
                                sceneRegs[i].Len, sceneRegs[i].Val);
     }
     /* SE1 (0x34/0x35) = 0x0A, SE2 (0x80|0x34/0x35) = 0x09 per fs1815.fsm */
-    ch = ((Addr & 0x7Fu) == 0x34u || (Addr & 0x7Fu) == 0x35u) ? 0x000Au : 0x0009u;
+    ch = (Addr & 0x80u) ? 0x0009u : 0x000Au;
     (VOID)Fs1815UpdateBits(Addr, 0x19, 0, 5, ch);
     (VOID)TaI2cWrite16(Addr, 0x5A, 0xF8E0);
     (VOID)TaI2cWrite16(Addr, 0x1F, 0x0000);                 /* lock private regs */
