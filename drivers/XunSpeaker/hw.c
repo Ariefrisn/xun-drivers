@@ -193,12 +193,15 @@ static NTSTATUS CodecBringUp(VOID)
     SwrWr(VA_SWR, 1, 0x3029, 0x85);
     SwrWr(VA_SWR, 1, 0x3001, 0xC0); TaSleep(10); SwrWr(VA_SWR, 1, 0x3001, 0x80);
     SwrWr(VA_SWR, 1, 0x30E2, 0xD9);
+    SwrWr(VA_SWR, 1, 0x306B, 0xFA); SwrWr(VA_SWR, 1, 0x306E, 0xFA); SwrWr(VA_SWR, 1, 0x3071, 0xFA);
     SwrWr(VA_SWR, 1, 0x30A5, 0xEB);
     SwrWr(VA_SWR, 1, 0x3409, 0x08); SwrWr(VA_SWR, 1, 0x3408, 0x01); SwrWr(VA_SWR, 1, 0x3008, 0x01);
     SwrWr(VA_SWR, 1, 0x340D, 0xBC); SwrWr(VA_SWR, 1, 0x340E, 0xBC); SwrWr(VA_SWR, 1, 0x340F, 0xBC);
     SwrWr(VA_SWR, 1, 0x3408, 0x03);
     SwrWr(VA_SWR, 1, 0x3408, 0x07); SwrWr(VA_SWR, 1, 0x3409, 0x0D); SwrWr(VA_SWR, 1, 0x344F, 0x01);
     SwrWr(VA_SWR, 1, 0x344E, 0x04); SwrWr(VA_SWR, 1, 0x3133, 0x02); SwrWr(VA_SWR, 1, 0x3414, 0x02);
+    SwrWr(VA_SWR, 1, 0x3450, 0x01);                 /* RDAC3_MUX = RX1 (for EAR_OUT Left speakers) */
+    SwrWr(VA_SWR, 1, 0x340B, 0x95);                 /* AUX PATH Mode = HP_MODE (bit 6 set on 0x55 default) */
     SwrWr(VA_SWR, 1, 0x30A4, 0x04); SwrWr(VA_SWR, 1, 0x3465, 0x13);
     SwrWr(VA_SWR, 1, 0x3009, 0x0C); SwrWr(VA_SWR, 1, 0x300A, 0x40); SwrWr(VA_SWR, 1, 0x300B, 0x12);
     SwrWr(VA_SWR, 1, 0x3008, 0x41); SwrWr(VA_SWR, 1, 0x3008, 0xC1);
@@ -230,10 +233,14 @@ static NTSTATUS CodecBringUp(VOID)
 /* SoundWire data ports (ports.ps1) + AUX PA (wcd_auxpa.ps1): after the first graph start */
 static VOID PortsAndPa(VOID)
 {
-    static const ULONG slv[][2] = { { 0x203, 7 }, { 0x230, 1 }, { 0x232, 0x1F }, { 0x233, 0 }, { 0x234, 0 },
-                                    { 0x236, 0x36 }, { 0x430, 1 }, { 0x432, 7 }, { 0x433, 0 }, { 0x434, 1 } };
+    static const ULONG slv[][2] = {
+        { 0x103, 7 }, { 0x130, 1 }, { 0x132, 7 }, { 0x133, 0 }, { 0x134, 3 },   /* Port 1: HPHL/EAR (ch 0xE, offset 3) */
+        { 0x203, 7 }, { 0x230, 1 }, { 0x232, 0x1F }, { 0x233, 0 }, { 0x234, 0 }, { 0x236, 0x36 }, /* Port 2: CLSH */
+        { 0x430, 1 }, { 0x432, 7 }, { 0x433, 0 }, { 0x434, 1 }                  /* Port 4: LO/AUX (ch 0x13, offset 1) */
+    };
     ULONG i;
 
+    TaWr(RX_SWR + 0x1164, 0x01000307); TaWr(RX_SWR + 0x117C, 0); TaWr(RX_SWR + 0x112C, 7); TaWr(RX_SWR + 0x1174, 0);
     TaWr(RX_SWR + 0x1264, 0x0100001F); TaWr(RX_SWR + 0x127C, 0); TaWr(RX_SWR + 0x122C, 7); TaWr(RX_SWR + 0x1274, 0x63);
     TaWr(RX_SWR + 0x1464, 0x01000107); TaWr(RX_SWR + 0x147C, 0); TaWr(RX_SWR + 0x1474, 0);
     for (i = 0; i < ARRAYSIZE(slv); i++) {
@@ -243,9 +250,10 @@ static VOID PortsAndPa(VOID)
     TaWr(RX_SWR + 0x300, (0x0Fu << 24) | (15u << 20) | (15u << 16) | 0x70);   /* broadcast bank switch */
     TaSleep(5);
     SwrWr(VA_SWR, 1, 0x3467, 0x05);
-    SwrWr(VA_SWR, 1, 0x3128, 0x80);
+    SwrWr(VA_SWR, 1, 0x3128, 0x90);                 /* AUX PATH Mode = HP_MODE (bit 4) + bit 7 */
+    SwrWr(VA_SWR, 1, 0x3008, 0xC3);                 /* RX_CTRL_0: HPH + EAR class-H / bias enable */
     SwrWr(VA_SWR, 1, 0x3009, 0xCC);                 /* WCD937X_ANA_HPH: HPHL + HPHR PA enable (xun.dts HPHL/R) */
-    SwrWr(VA_SWR, 1, 0x300B, 0x92);                 /* WCD937X_ANA_EAR: EAR PA enable */
+    SwrWr(VA_SWR, 1, 0x300B, 0x92);                 /* WCD937X_ANA_EAR: EAR PA enable (G_0_DB) */
     SwrWr(VA_SWR, 1, 0x346B, 0x4C);
     SwrWr(VA_SWR, 1, 0x346C, 0x7F);
     SwrWr(VA_SWR, 1, 0x346D, 0x0F);
