@@ -87,10 +87,12 @@ static VOID BoPurge(TGPU_BO *Bo)
         HwWaitFence(Bo->LastFence, 500);
     }
     BoUnmapAll(Bo, NULL);
-    TgFreePages(Bo->Mdl, Bo->KernelVa, Bo->Size, Bo->Iova);
+    TgFreePages(Bo->Mdl, Bo->KernelVa, Bo->Size, Bo->Iova, Bo->Contig);
     Bo->Mdl = NULL;
     Bo->KernelVa = NULL;
     Bo->Iova = 0;
+    Bo->ScanoutPa = 0;
+    Bo->Contig = FALSE;
     Bo->Madv = __MSM_MADV_PURGED;
     g_BoBytes -= Bo->Size;
 }
@@ -126,10 +128,12 @@ static VOID BoFree(TGPU_BO *Bo)
             HwWaitFence(Bo->LastFence, 500);
         }
         BoUnmapAll(Bo, NULL);
-        TgFreePages(Bo->Mdl, Bo->KernelVa, Bo->Size, Bo->Iova);
+        TgFreePages(Bo->Mdl, Bo->KernelVa, Bo->Size, Bo->Iova, Bo->Contig);
         Bo->Mdl = NULL;
         Bo->KernelVa = NULL;
         Bo->Iova = 0;
+        Bo->ScanoutPa = 0;
+        Bo->Contig = FALSE;
         g_BoBytes -= Bo->Size;
     }
     g_BoTable[Bo->Handle] = NULL;
@@ -197,6 +201,7 @@ static NTSTATUS GemNew(struct drm_msm_gem_new *A)
     PHYSICAL_ADDRESS lo, hi, skip;
     TGPU_BO *bo;
     ULONG h;
+    BOOLEAN preferContig;
 
     if (A->size == 0 || A->size > 0x40000000ull) {
         return STATUS_INVALID_PARAMETER;
@@ -219,18 +224,20 @@ static NTSTATUS GemNew(struct drm_msm_gem_new *A)
     if (g_BoBytes > GEM_SOFT_LIMIT_BYTES) {
         BoShrink(0);
     }
-    bo->Mdl = TgAllocPages(bo->Size, &bo->Iova, &bo->KernelVa);
+    preferContig = (bo->Size >= 8800000 && bo->Size <= 10000000);
+    bo->Mdl = TgAllocPages(bo->Size, preferContig, &bo->Iova, &bo->ScanoutPa, &bo->KernelVa, &bo->Contig);
     if (bo->Mdl == NULL) {
         SIZE_T reclaimed = BoShrink(bo->Size);
         if (reclaimed > 0) {
-            bo->Mdl = TgAllocPages(bo->Size, &bo->Iova, &bo->KernelVa);
+            bo->Mdl = TgAllocPages(bo->Size, preferContig, &bo->Iova, &bo->ScanoutPa, &bo->KernelVa, &bo->Contig);
         }
     }
     if (bo->Mdl == NULL) {
         g_GemFailCount++;
         if (g_GemFailCount <= 8 || (g_GemFailCount & 0xFF) == 0) {
-            LogPrint("GEM_NEW: %llu KB contiguous failed (%u BOs / %llu KB allocated, fail #%u)\n",
-                     (ULONGLONG)bo->Size / 1024, g_BoCount, g_BoBytes / 1024, g_GemFailCount);
+            LogPrint("GEM_NEW: %llu KB (%s) failed (%u BOs / %llu KB allocated, fail #%u)\n",
+                     (ULONGLONG)bo->Size / 1024, HwUsingSmmu() ? "smmu" : "contig", g_BoCount, g_BoBytes / 1024,
+                     g_GemFailCount);
         }
         ExFreePoolWithTag(bo, TGPU_POOL_TAG);
         return STATUS_NO_MEMORY;
@@ -243,7 +250,7 @@ static NTSTATUS GemNew(struct drm_msm_gem_new *A)
     }
     if (h == BO_MAX) {
         bo->Handle = 0;
-        TgFreePages(bo->Mdl, bo->KernelVa, bo->Size, bo->Iova);
+        TgFreePages(bo->Mdl, bo->KernelVa, bo->Size, bo->Iova, bo->Contig);
         ExFreePoolWithTag(bo, TGPU_POOL_TAG);
         return STATUS_NO_MEMORY;
     }
@@ -654,6 +661,33 @@ VOID MsmBoRelease(TGPU_BO *Bo)
         BoFree(Bo);
     }
     KeReleaseMutex(&g_BoLock, FALSE);
+}
+
+PVOID MsmBoKernelVa(TGPU_BO *Bo)
+{
+    PVOID cur, mapped;
+
+    if (Bo == NULL || Bo->Mdl == NULL) {
+        return NULL;
+    }
+    cur = Bo->KernelVa;
+    if (cur != NULL) {
+        return cur;
+    }
+    if (KeGetCurrentIrql() > APC_LEVEL) {
+        return NULL;
+    }
+    mapped = MmMapLockedPagesSpecifyCache(Bo->Mdl, KernelMode, MmWriteCombined, NULL, FALSE,
+                                          NormalPagePriority | MdlMappingNoExecute);
+    if (mapped == NULL) {
+        return NULL;
+    }
+    cur = InterlockedCompareExchangePointer(&Bo->KernelVa, mapped, NULL);
+    if (cur != NULL) {
+        MmUnmapLockedPages(mapped, Bo->Mdl);
+        return cur;
+    }
+    return mapped;
 }
 
 /* step C2 (v0.32): a BO created by the KMD itself (GDI texture surfaces DWM must sample) */

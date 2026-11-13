@@ -105,7 +105,7 @@ static VOID ModemThread(PVOID Context)
 
     UNREFERENCED_PARAMETER(Context);
     KeSetSystemAffinityThreadEx((KAFFINITY)1);         /* TZ resumes + polling stay on one core */
-    KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
+    KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY - 2);
     /* Wi-Fi needs the modem on every boot: boot it unless C:\xun\modem.off exists. A crash here is
        caught by the boot guard (C:\xun\wifi.boot). modem.arm (XunModem's one-shot) is consumed too. */
     FileProbe(L"\\??\\C:\\xun\\modem.arm", TRUE);

@@ -91,7 +91,8 @@ static VOID MdpScanFrom(ULONG Pa, ULONG Stride, BOOLEAN Flip)
     WRITE_REGISTER_ULONG((volatile ULONG *)(g_Mdp + MDP_CTL0 + CTL_FLUSH), CTL_FLUSH_VIG0 | CTL_FLUSH_CTL);
 }
 
-/* point VIG0 at Al when it is a BO-backed panel-axis primary (Identity/180/90/270 if already WxH); TRUE = no CPU copy needed. Any IRQL. */
+/* point VIG0 at Al when it is a BO-backed panel-axis primary (Identity/180/90/270 if already WxH); TRUE = no CPU copy needed.
+   Caller must run at DIRQL (DispSetSourceAddress) or via DirectSelectLocked() so VIG0/CTL_FLUSH writes never race. */
 static BOOLEAN DirectSelect(TGPU_ALLOCATION *Al)
 {
     D3DKMDT_VIDPN_PRESENT_PATH_ROTATION rot = (D3DKMDT_VIDPN_PRESENT_PATH_ROTATION)g_PathRotation;
@@ -99,9 +100,9 @@ static BOOLEAN DirectSelect(TGPU_ALLOCATION *Al)
     if (g_DirectOk && Al != NULL && Al->Bo != NULL &&
         (rot == D3DKMDT_VPPR_IDENTITY || rot == D3DKMDT_VPPR_ROTATE180 || IsRotationLandscape(rot)) &&
         Al->Desc.width == g_Post.Width && Al->Desc.height == g_Post.Height &&
-        Al->Bo->Iova + Al->Desc.bo_offset < 0x100000000ULL) {
+        Al->Bo->ScanoutPa != 0 && Al->Bo->ScanoutPa + Al->Desc.bo_offset < 0x100000000ULL) {
         BOOLEAN flip = (rot == D3DKMDT_VPPR_ROTATE180) ? !g_DispFlip : g_DispFlip;
-        MdpScanFrom((ULONG)(Al->Bo->Iova + Al->Desc.bo_offset), Al->Desc.pitch, flip);
+        MdpScanFrom((ULONG)(Al->Bo->ScanoutPa + Al->Desc.bo_offset), Al->Desc.pitch, flip);
         InterlockedExchange(&g_DirectActive, 1);
         g_DirectFlips++;
         return TRUE;
@@ -110,6 +111,21 @@ static BOOLEAN DirectSelect(TGPU_ALLOCATION *Al)
         MdpScanFrom(g_FbAddr, g_FbStride, FALSE);
     }
     return FALSE;
+}
+
+static BOOLEAN DirectSelectSync(PVOID Ctx)
+{
+    return DirectSelect((TGPU_ALLOCATION *)Ctx);
+}
+
+static BOOLEAN DirectSelectLocked(TGPU_ALLOCATION *Al)
+{
+    BOOLEAN ret = FALSE;
+    if (g_Dxgk != NULL && KeGetCurrentIrql() <= DISPATCH_LEVEL) {
+        g_Dxgk->DxgkCbSynchronizeExecution(g_Dxgk->DeviceHandle, DirectSelectSync, Al, 0, &ret);
+        return ret;
+    }
+    return DirectSelect(Al);
 }
 static PHYSICAL_ADDRESS g_ScanPa;               /* its address as Dxgkrnl knows it (last flip) */
 /* v0.45 async present: the UMD no longer waits for the GPU before presenting; a direct flip to a BO whose last
@@ -188,6 +204,18 @@ static VOID VsyncNotify(BOOLEAN flip)
     }
 }
 
+static BOOLEAN DeferCompleteSync(PVOID Ctx)
+{
+    UNREFERENCED_PARAMETER(Ctx);
+    if (g_Deferred && (LONG)(HwCompletedFence() - g_DeferFence) >= 0 && g_DeferAl == g_ScanCur) {
+        InterlockedExchange(&g_Deferred, 0);
+        if (!DirectSelect(g_DeferAl)) {
+            InterlockedExchange(&g_ScanDirty, 1);
+        }
+    }
+    return TRUE;
+}
+
 static VOID VsyncWork(BOOLEAN periodicTick)
 {
     LONG64 now = (LONG64)KeQueryInterruptTime();
@@ -212,12 +240,12 @@ static VOID VsyncWork(BOOLEAN periodicTick)
         }
     }
 
-    if (g_Deferred) {
-        if ((LONG)(HwCompletedFence() - g_DeferFence) >= 0 && g_DeferAl == g_ScanCur) {
-            InterlockedExchange(&g_Deferred, 0);
-            if (!DirectSelect(g_DeferAl)) {
-                InterlockedExchange(&g_ScanDirty, 1);
-            }
+    if (g_Deferred && (LONG)(HwCompletedFence() - g_DeferFence) >= 0) {
+        if (g_Dxgk != NULL) {
+            BOOLEAN ret = FALSE;
+            g_Dxgk->DxgkCbSynchronizeExecution(g_Dxgk->DeviceHandle, DeferCompleteSync, NULL, 0, &ret);
+        } else {
+            DeferCompleteSync(NULL);
         }
     }
     if (g_FlipPending && !g_Deferred) {
@@ -476,16 +504,32 @@ VOID DispPresentRects(TGPU_ALLOCATION *Dst, const RECT *Rects, ULONG Count)
     DispScanUnlock();
 }
 
-VOID DispAllocDestroyed(TGPU_ALLOCATION *Al)
+static BOOLEAN AllocDestroySync(PVOID Ctx)
 {
-    DispScanLock();
-    if (g_DeferAl == Al) {                               /* never flip to a freed BO later */
+    TGPU_ALLOCATION *al = (TGPU_ALLOCATION *)Ctx;
+    if (g_DeferAl == al) {                               /* never flip to a freed BO later */
         InterlockedExchange(&g_Deferred, 0);
         g_DeferAl = NULL;
     }
-    if (g_ScanCur == Al) {
+    if (g_ScanCur == al) {
         DirectSelect(NULL);                              /* never fetch from a freed BO */
         g_ScanCur = NULL;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+VOID DispAllocDestroyed(TGPU_ALLOCATION *Al)
+{
+    BOOLEAN wasScanned = FALSE;
+
+    DispScanLock();
+    if (g_Dxgk != NULL) {
+        g_Dxgk->DxgkCbSynchronizeExecution(g_Dxgk->DeviceHandle, AllocDestroySync, Al, 0, &wasScanned);
+    } else {
+        wasScanned = AllocDestroySync(Al);
+    }
+    if (wasScanned) {
         LogPrint("scanout: primary %p destroyed while scanned out\n", Al);
     }
     DispScanUnlock();
@@ -495,8 +539,12 @@ VOID DispApertureWillUnmap(TGPU_ALLOCATION *Al)
 {
     DispScanLock();
     if (Al != NULL && g_ScanCur == Al) {
-        DirectSelect(NULL);
-        g_ScanCur = NULL;
+        if (g_Dxgk != NULL) {
+            BOOLEAN wasScanned = FALSE;
+            g_Dxgk->DxgkCbSynchronizeExecution(g_Dxgk->DeviceHandle, AllocDestroySync, Al, 0, &wasScanned);
+        } else {
+            AllocDestroySync(Al);
+        }
     }
     AllocUnmapAperture(Al);
     DispScanUnlock();
@@ -533,7 +581,7 @@ NTSTATUS DispSetSourceAddress(const DXGKARG_SETVIDPNSOURCEADDRESS *A)
         InterlockedExchange(&g_ScanDirty, 1);
     }
     InterlockedExchange(&g_FlipPending, 1);
-    if (++count <= 500) {
+    if (++count <= 32) {
         LogPrint("SetVidPnSourceAddress: src %u alloc %p seg %u pa %llx flags %x%s\n", A->VidPnSourceId, A->hAllocation,
                  A->PrimarySegment, A->PrimaryAddress.QuadPart, A->Flags.Value, direct ? " (direct scanout)" : "");
     }
@@ -1232,7 +1280,7 @@ NTSTATUS DispUpdateActivePath(const DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH *A)
     LogPrint("UpdateActiveVidPnPresentPath: src %u -> tgt %u rot %u\n",
              A->VidPnPresentPathInfo.VidPnSourceId, A->VidPnPresentPathInfo.VidPnTargetId, (ULONG)rot);
     DispScanLock();
-    if (g_ScanCur != NULL && !DirectSelect(g_ScanCur)) {
+    if (g_ScanCur != NULL && !DirectSelectLocked(g_ScanCur)) {
         InterlockedExchange(&g_ScanDirty, 1);
         EngKickScanout();
     }
@@ -1285,7 +1333,7 @@ NTSTATUS DispCommitVidPn(PDXGKRNL_INTERFACE Dxgk, const DXGKARG_COMMITVIDPN *A)
                  pin ? pin->Format.Graphics.Stride : 0, pin ? pin->Format.Graphics.PixelFormat : 0, (ULONG)rot,
                  A->hPrimaryAllocation);
         if (!g_Committed) {
-            DirectSelect(NULL);
+            DirectSelectLocked(NULL);
             DispScanLock();
             g_ScanCur = NULL;
             DispScanUnlock();
@@ -1293,10 +1341,10 @@ NTSTATUS DispCommitVidPn(PDXGKRNL_INTERFACE Dxgk, const DXGKARG_COMMITVIDPN *A)
             DispScanLock();
             g_ScanCur = (TGPU_ALLOCATION *)A->hPrimaryAllocation;
             DispScanUnlock();
-            if (!DirectSelect(g_ScanCur)) {
+            if (!DirectSelectLocked(g_ScanCur)) {
                 InterlockedExchange(&g_ScanDirty, 1);
             }
-        } else if (g_ScanCur != NULL && !DirectSelect(g_ScanCur)) {
+        } else if (g_ScanCur != NULL && !DirectSelectLocked(g_ScanCur)) {
             InterlockedExchange(&g_ScanDirty, 1);
         }
     } else {

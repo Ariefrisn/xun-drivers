@@ -55,15 +55,19 @@ typedef struct _KBUF {
     PVOID     Va;
     ULONGLONG Iova;
     SIZE_T    Size;
+    BOOLEAN   Contig;
+    BOOLEAN   SmmuMapped;
 } KBUF;
 
 static volatile UCHAR *g_Gcc, *g_GpuCc, *g_Gpu, *g_Smmu, *g_Gmu;
 static BOOLEAN g_Ready, g_Failed, g_SmmuOn;
+static BOOLEAN g_UseSmmu = TRUE;                         /* stage-1 page tables with runtime identity fallback */
 static BOOLEAN g_Wedged;                                 /* v0.18: a fence timed out, GPU hung */
 static ULONG g_GmemSize = 0x21000;                       /* 128K + 4K (bengal); v0.24: C:\xun\gpu.gmem overrides */
 static KMUTEX g_HwLock;          /* not FAST_MUTEX: file I/O (zap, SQE) at APC_LEVEL deadlocks */
 static KBUF g_Ring, g_Sqe, g_Mem;               /* g_Mem: fence at +0 */
 static ULONG g_Wptr, g_Seqno;
+static SIZE_T g_ContigScanoutBytes;
 
 /* page tables */
 static PULONGLONG g_L1;
@@ -598,9 +602,15 @@ VOID MmuUnmap(ULONGLONG Va, SIZE_T Size)
 
 static BOOLEAN SmmuSetup(VOID)
 {
-    g_L1 = TableAlloc(&g_L1Pa);
+    ULONG scr0 = Rd(g_Smmu, 0x000);
+    ULONG idr0 = Rd(g_Smmu, 0x020);
+    ULONG idr1 = Rd(g_Smmu, 0x024);
+
     if (g_L1 == NULL) {
-        return FALSE;
+        g_L1 = TableAlloc(&g_L1Pa);
+        if (g_L1 == NULL) {
+            return FALSE;
+        }
     }
     Wr(g_Smmu, SMMU_CB0 + 0x000, 0);                     /* SCTLR off while programming */
     Wr(g_Smmu, SMMU_CB0 + 0x058, 0xFFFFFFFF);            /* FSR clear */
@@ -608,27 +618,33 @@ static BOOLEAN SmmuSetup(VOID)
     Wr(g_Smmu, 0x1000, 0x0001f000);                      /* CBAR0: S1 translate, S2 bypass */
     Wr(g_Smmu, SMMU_CB0 + 0x020, (ULONG)g_L1Pa.QuadPart);
     Wr(g_Smmu, SMMU_CB0 + 0x024, (ULONG)(g_L1Pa.QuadPart >> 32));   /* TTBR0, ASID 0 */
-    /* TCR: T0SZ 32 = exactly the 4 GB the A610 uses (walk starts at level 1, 4 entries), 4 KB granule,
-       non-cacheable walks, EPD1. TCR2: PASize 36-bit = this SMMU's OAS (IDR2 0x5511); v0.12 had 39-bit
-       VA + 40-bit PA and got a translation fault at level 0 on the first CP fetch. */
+    /* TCR: T0SZ 32 = 4 GB GPU VA (walk starts at level 1, 4 entries), 4 KB granule,
+       non-cacheable walks, EPD1. TCR2: PASize 36-bit = this SMMU's OAS (IDR2 0x5511). */
     Wr(g_Smmu, SMMU_CB0 + 0x030, 32 | (1u << 23));
     Wr(g_Smmu, SMMU_CB0 + 0x010, 1);
     Wr(g_Smmu, SMMU_CB0 + 0x038, 0x44);                  /* MAIR0: attr0 = Normal non-cacheable */
     Wr(g_Smmu, SMMU_CB0 + 0x03C, 0);
     __dsb(_ARM64_BARRIER_SY);
-#if TGPU_IDENTITY
-    Wr(g_Smmu, SMMU_CB0 + 0x000, 0xE0);                  /* SCTLR: M=0 pass-through (G1) */
-#else
-    Wr(g_Smmu, SMMU_CB0 + 0x000, 0x67);                  /* SCTLR: CFIE CFRE AFE TRE M */
-#endif
-    Wr(g_Smmu, 0xC00, 0);                                /* S2CR0 -> CB0 */
-    Wr(g_Smmu, 0x800, (1u << 31) | (1u << 16));          /* SMR0: SID 0 mask 1 */
-    g_SmmuOn = TRUE;
-    TlbFlush();
-    LogPrint("  SMMU: TTBR0 %08x%08x SCTLR %08x TCR %08x TCR2 %08x CBA2R %08x CBAR %08x MAIR0 %08x IDR2 %08x\n",
+    if (g_UseSmmu) {
+        if (scr0 & 1u) {
+            Wr(g_Smmu, 0x000, scr0 & ~1u);               /* clear CLIENTPD so stage-1 translates */
+        }
+        TlbFlush();
+        Wr(g_Smmu, SMMU_CB0 + 0x000, 0x65);              /* SCTLR: CFIE | CFRE | AFE | M (abort on fault) */
+        Wr(g_Smmu, 0xC00, 0);                            /* S2CR0 -> CB0 */
+        Wr(g_Smmu, 0x800, (1u << 31) | (0x7FFFu << 16)); /* SMR0: match all GPU stream IDs */
+        g_SmmuOn = TRUE;
+        TlbFlush();
+    } else {
+        Wr(g_Smmu, SMMU_CB0 + 0x000, 0xE0);              /* SCTLR: M=0 pass-through (identity fallback) */
+        Wr(g_Smmu, 0xC00, 0);                            /* S2CR0 -> CB0 */
+        Wr(g_Smmu, 0x800, (1u << 31) | (1u << 16));      /* SMR0: SID 0 mask 1 */
+        g_SmmuOn = FALSE;
+    }
+    LogPrint("  SMMU(%s): sCR0 %08x->%08x IDR0 %08x IDR1 %08x TTBR0 %08x%08x SCTLR %08x TCR %08x TCR2 %08x CBA2R %08x CBAR %08x IDR2 %08x\n",
+             g_UseSmmu ? "stage1" : "identity", scr0, Rd(g_Smmu, 0x000), idr0, idr1,
              Rd(g_Smmu, SMMU_CB0 + 0x24), Rd(g_Smmu, SMMU_CB0 + 0x20), Rd(g_Smmu, SMMU_CB0), Rd(g_Smmu, SMMU_CB0 + 0x30),
-             Rd(g_Smmu, SMMU_CB0 + 0x10), Rd(g_Smmu, 0x1800), Rd(g_Smmu, 0x1000), Rd(g_Smmu, SMMU_CB0 + 0x38),
-             Rd(g_Smmu, 0x28));
+             Rd(g_Smmu, SMMU_CB0 + 0x10), Rd(g_Smmu, 0x1800), Rd(g_Smmu, 0x1000), Rd(g_Smmu, 0x28));
     return TRUE;
 }
 
@@ -666,20 +682,49 @@ ULONGLONG VaAlloc(SIZE_T Size)
 
 VOID VaFree(ULONGLONG Va, SIZE_T Size)
 {
-    VA_RANGE *r = (VA_RANGE *)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(VA_RANGE), TGPU_POOL_TAG);
-    if (r != NULL) {                                    /* no coalescing: fine for now */
+    PLIST_ENTRY e;
+    VA_RANGE *cur, *prev = NULL, *r;
+
+    Size = ROUND_TO_PAGES(Size);
+    if (Size == 0) {
+        return;
+    }
+    for (e = g_VaFree.Flink; e != &g_VaFree; e = e->Flink) {
+        cur = CONTAINING_RECORD(e, VA_RANGE, Link);
+        if (cur->Start >= Va) {
+            break;
+        }
+        prev = cur;
+    }
+    cur = (e != &g_VaFree) ? CONTAINING_RECORD(e, VA_RANGE, Link) : NULL;
+    if (prev != NULL && prev->Start + prev->Size == Va) {
+        prev->Size += Size;
+        if (cur != NULL && prev->Start + prev->Size == cur->Start) {
+            prev->Size += cur->Size;
+            RemoveEntryList(&cur->Link);
+            ExFreePoolWithTag(cur, TGPU_POOL_TAG);
+        }
+        return;
+    }
+    if (cur != NULL && Va + Size == cur->Start) {
+        cur->Start = Va;
+        cur->Size += Size;
+        return;
+    }
+    r = (VA_RANGE *)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(VA_RANGE), TGPU_POOL_TAG);
+    if (r != NULL) {
         r->Start = Va;
-        r->Size = ROUND_TO_PAGES(Size);
-        InsertHeadList(&g_VaFree, &r->Link);
+        r->Size = Size;
+        InsertTailList(e, &r->Link);                     /* insert immediately before e */
     }
 }
 
 /* ---------------------------------------------------------------- kernel buffers */
 
-/* GPU-visible pages: identity mode = contiguous WC memory below 4 GB, GPU VA = PA */
-PMDL TgAllocPages(SIZE_T Size, PULONGLONG Iova, PVOID *KernelVa)
+#define MAX_CONTIG_SCANOUT_BYTES (48ULL * 1024 * 1024)
+
+static PMDL TgAllocContig(SIZE_T Size, PULONGLONG Pa, PVOID *KernelVa)
 {
-#if TGPU_IDENTITY
     PHYSICAL_ADDRESS lo, hi, bound;
     PVOID va;
     PMDL mdl;
@@ -687,7 +732,6 @@ PMDL TgAllocPages(SIZE_T Size, PULONGLONG Iova, PVOID *KernelVa)
     lo.QuadPart = 0;
     hi.QuadPart = 0xFFFFFFFF;
     bound.QuadPart = 0;
-    Size = ROUND_TO_PAGES(Size);
     va = MmAllocateContiguousMemorySpecifyCache(Size, lo, hi, bound, MmWriteCombined);
     if (va == NULL) {
         return NULL;
@@ -700,89 +744,163 @@ PMDL TgAllocPages(SIZE_T Size, PULONGLONG Iova, PVOID *KernelVa)
     MmBuildMdlForNonPagedPool(mdl);
     RtlZeroMemory(va, Size);
     *KernelVa = va;
-    *Iova = (ULONGLONG)MmGetPhysicalAddress(va).QuadPart;
+    *Pa = (ULONGLONG)MmGetPhysicalAddress(va).QuadPart;
     return mdl;
-#else
+}
+
+static VOID TgFreeContig(PMDL Mdl, PVOID KernelVa, SIZE_T Size)
+{
+    IoFreeMdl(Mdl);
+    MmFreeContiguousMemorySpecifyCache(KernelVa, Size, MmWriteCombined);
+}
+
+/* GPU-visible pages: stage-1 SMMU scatters normal BOs across <64 GB RAM; optional contiguous <4 GB for scanout/identity */
+PMDL TgAllocPages(SIZE_T Size, BOOLEAN PreferContig, PULONGLONG Iova, PULONGLONG ScanoutPa,
+                  PVOID *KernelVa, PBOOLEAN IsContig)
+{
     PHYSICAL_ADDRESS lo, hi, skip;
     PMDL mdl;
 
-    lo.QuadPart = 0;
-    hi.QuadPart = 0xFFFFFFFF;
-    skip.QuadPart = 0;
     Size = ROUND_TO_PAGES(Size);
+    *Iova = 0;
+    *ScanoutPa = 0;
+    *KernelVa = NULL;
+    *IsContig = FALSE;
+
+    if (!g_UseSmmu) {
+        ULONGLONG pa = 0;
+        mdl = TgAllocContig(Size, &pa, KernelVa);
+        if (mdl == NULL) {
+            return NULL;
+        }
+        *Iova = pa;
+        *ScanoutPa = pa;
+        *IsContig = TRUE;
+        return mdl;
+    }
+
+    if (PreferContig && g_ContigScanoutBytes + Size <= MAX_CONTIG_SCANOUT_BYTES) {
+        ULONGLONG pa = 0;
+        PVOID va = NULL;
+        mdl = TgAllocContig(Size, &pa, &va);
+        if (mdl != NULL) {
+            ULONGLONG iova = VaAlloc(Size + PAGE_SIZE);
+            if (iova != 0 && NT_SUCCESS(MmuMap(iova, mdl, Size))) {
+                *Iova = iova;
+                *ScanoutPa = pa;
+                *KernelVa = va;
+                *IsContig = TRUE;
+                g_ContigScanoutBytes += Size;
+                return mdl;
+            }
+            if (iova != 0) {
+                MmuUnmap(iova, Size);
+                VaFree(iova, Size + PAGE_SIZE);
+            }
+            TgFreeContig(mdl, va, Size);
+        }
+    }
+
+    lo.QuadPart = 0;
+    hi.QuadPart = 0xFFFFFFFFFULL;                        /* 36-bit SMMU OAS = 64 GB */
+    skip.QuadPart = 0;
     mdl = MmAllocatePagesForMdlEx(lo, hi, skip, Size, MmWriteCombined, MM_ALLOCATE_FULLY_REQUIRED);
     if (mdl == NULL) {
         return NULL;
     }
-    *KernelVa = NULL;
     *Iova = VaAlloc(Size + PAGE_SIZE);
     if (*Iova == 0 || !NT_SUCCESS(MmuMap(*Iova, mdl, Size))) {
+        if (*Iova != 0) {
+            MmuUnmap(*Iova, Size);
+            VaFree(*Iova, Size + PAGE_SIZE);
+            *Iova = 0;
+        }
         MmFreePagesFromMdl(mdl);
         ExFreePool(mdl);
         return NULL;
     }
     return mdl;
-#endif
 }
 
-VOID TgFreePages(PMDL Mdl, PVOID KernelVa, SIZE_T Size, ULONGLONG Iova)
+VOID TgFreePages(PMDL Mdl, PVOID KernelVa, SIZE_T Size, ULONGLONG Iova, BOOLEAN IsContig)
 {
-#if TGPU_IDENTITY
-    UNREFERENCED_PARAMETER(Iova);
-    IoFreeMdl(Mdl);
-    MmFreeContiguousMemorySpecifyCache(KernelVa, ROUND_TO_PAGES(Size), MmWriteCombined);
-#else
-    UNREFERENCED_PARAMETER(KernelVa);
-    MmuUnmap(Iova, Size);
-    VaFree(Iova, Size + PAGE_SIZE);
+    Size = ROUND_TO_PAGES(Size);
+    if (g_UseSmmu && Iova != 0) {
+        MmuUnmap(Iova, Size);
+        VaFree(Iova, Size + PAGE_SIZE);
+    }
+    if (IsContig) {
+        if (g_UseSmmu) {
+            g_ContigScanoutBytes = (g_ContigScanoutBytes >= Size) ? (g_ContigScanoutBytes - Size) : 0;
+        }
+        TgFreeContig(Mdl, KernelVa, Size);
+        return;
+    }
+    if (KernelVa != NULL) {
+        MmUnmapLockedPages(KernelVa, Mdl);
+    }
     MmFreePagesFromMdl(Mdl);
     ExFreePool(Mdl);
-#endif
 }
 
 static BOOLEAN KBufAlloc(KBUF *B, SIZE_T Size)
 {
-#if TGPU_IDENTITY
-    B->Size = ROUND_TO_PAGES(Size);
-    B->Mdl = TgAllocPages(B->Size, &B->Iova, &B->Va);
-    return B->Mdl != NULL;
-#else
     PHYSICAL_ADDRESS lo, hi, skip;
 
-    lo.QuadPart = 0;
-    hi.QuadPart = 0xFFFFFFFF;
-    skip.QuadPart = 0;
+    RtlZeroMemory(B, sizeof(*B));
     B->Size = ROUND_TO_PAGES(Size);
+    if (!g_UseSmmu) {
+        B->Mdl = TgAllocContig(B->Size, &B->Iova, &B->Va);
+        B->Contig = B->Mdl != NULL;
+        return B->Contig;
+    }
+    lo.QuadPart = 0;
+    hi.QuadPart = 0xFFFFFFFFFULL;
+    skip.QuadPart = 0;
     B->Mdl = MmAllocatePagesForMdlEx(lo, hi, skip, B->Size, MmWriteCombined, MM_ALLOCATE_FULLY_REQUIRED);
     if (B->Mdl == NULL) {
         return FALSE;
     }
-    B->Va = MmMapLockedPagesSpecifyCache(B->Mdl, KernelMode, MmWriteCombined, NULL, FALSE, NormalPagePriority);
+    B->Va = MmMapLockedPagesSpecifyCache(B->Mdl, KernelMode, MmWriteCombined, NULL, FALSE,
+                                         NormalPagePriority | MdlMappingNoExecute);
     if (B->Va == NULL) {
+        MmFreePagesFromMdl(B->Mdl);
+        ExFreePool(B->Mdl);
+        B->Mdl = NULL;
         return FALSE;
     }
     RtlZeroMemory(B->Va, B->Size);
     B->Iova = g_KernelVaNext;
     g_KernelVaNext += B->Size + PAGE_SIZE;               /* guard page */
-    return NT_SUCCESS(MmuMap(B->Iova, B->Mdl, B->Size));
-#endif
+    if (!NT_SUCCESS(MmuMap(B->Iova, B->Mdl, B->Size))) {
+        MmuUnmap(B->Iova, B->Size);
+        MmUnmapLockedPages(B->Va, B->Mdl);
+        MmFreePagesFromMdl(B->Mdl);
+        ExFreePool(B->Mdl);
+        RtlZeroMemory(B, sizeof(*B));
+        return FALSE;
+    }
+    B->SmmuMapped = TRUE;
+    return TRUE;
 }
 
 static VOID KBufFree(KBUF *B)
 {
-#if TGPU_IDENTITY
-    if (B->Mdl != NULL) {
-        TgFreePages(B->Mdl, B->Va, B->Size, B->Iova);
+    if (B->SmmuMapped && B->Iova != 0) {
+        MmuUnmap(B->Iova, B->Size);
     }
-    RtlZeroMemory(B, sizeof(*B));
-    return;
-#endif
-    if (B->Va != NULL) {
-        MmUnmapLockedPages(B->Va, B->Mdl);
-    }
-    if (B->Mdl != NULL) {
-        MmFreePagesFromMdl(B->Mdl);
-        ExFreePool(B->Mdl);
+    if (B->Contig) {
+        if (B->Mdl != NULL) {
+            TgFreeContig(B->Mdl, B->Va, B->Size);
+        }
+    } else {
+        if (B->Va != NULL && B->Mdl != NULL) {
+            MmUnmapLockedPages(B->Va, B->Mdl);
+        }
+        if (B->Mdl != NULL) {
+            MmFreePagesFromMdl(B->Mdl);
+            ExFreePool(B->Mdl);
+        }
     }
     RtlZeroMemory(B, sizeof(*B));
 }
@@ -1041,6 +1159,15 @@ BOOLEAN HwStart(VOID)
         goto out;
     }
     LogPrint("--- GPU start\n");
+    {
+        ULONG fsz = 0;
+        PUCHAR flag = ReadWholeFile(L"\\??\\C:\\xun\\gpu.nosmmu", &fsz);
+        if (flag != NULL) {
+            ExFreePoolWithTag(flag, TGPU_POOL_TAG);
+            g_UseSmmu = FALSE;
+            LogPrint("  gpu.nosmmu present: forcing identity pass-through mode\n");
+        }
+    }
     InitializeListHead(&g_VaFree);
     VaFree(TGPU_VA_USER_START, (SIZE_T)(TGPU_VA_KERNEL - TGPU_VA_USER_START));
     g_Gcc = MapIo(GCC_BASE, GCC_SIZE);
@@ -1060,7 +1187,19 @@ BOOLEAN HwStart(VOID)
     UNREFERENCED_PARAMETER(Sptprac);
     LoadGmemOverride();
     if (!ZapLoad() || !SmmuSetup() || !CpStart()) {
-        goto fail;
+        if (!g_UseSmmu) {
+            goto fail;
+        }
+        LogPrint("  SMMU stage-1 startup failed -> falling back to identity pass-through mode\n");
+        KBufFree(&g_Sqe);
+        KBufFree(&g_Ring);
+        KBufFree(&g_Mem);
+        g_KernelVaNext = TGPU_VA_KERNEL;
+        g_UseSmmu = FALSE;
+        g_SmmuOn = FALSE;
+        if (!PowerUp() || !ZapLoad() || !SmmuSetup() || !CpStart()) {
+            goto fail;
+        }
     }
     g_Wedged = FALSE;
     g_Ready = TRUE;
@@ -1114,6 +1253,11 @@ VOID HwStop(VOID)
 BOOLEAN HwReady(VOID)
 {
     return g_Ready;
+}
+
+BOOLEAN HwUsingSmmu(VOID)
+{
+    return g_UseSmmu;
 }
 
 VOID HwInit(VOID);
@@ -1196,12 +1340,10 @@ BOOLEAN HwWaitFence(ULONG Fence, ULONG TimeoutMs)
     ULONG waited = 0;
 
     d.QuadPart = -2000;                                  /* 200 us */
-    /* v0.44: spin first. KeDelayExecutionThread only wakes on the system timer tick (1-15.6 ms), so every
-       Present's fence wait cost up to a tick whatever the GPU speed (5-10 ms at 600 and at 1260 MHz). Busy-poll
-       with 20 us stalls for up to 16 ms (one frame), then fall back to sleeping. */
+    /* v0.46: brief 1 ms poll for short submits before sleeping so UI/audio threads are not starved */
     if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
         ULONG spin;
-        for (spin = 0; spin < 800 && (LONG)(HwCompletedFence() - Fence) < 0 && !g_Wedged; spin++) {
+        for (spin = 0; spin < 50 && (LONG)(HwCompletedFence() - Fence) < 0 && !g_Wedged; spin++) {
             KeStallExecutionProcessor(20);
         }
     }

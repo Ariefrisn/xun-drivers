@@ -555,7 +555,8 @@ PUCHAR AllocPixels(TGPU_ALLOCATION *Al)
         return NULL;
     }
     if (Al->Bo != NULL) {
-        return Al->Bo->KernelVa != NULL ? (PUCHAR)Al->Bo->KernelVa + Al->Desc.bo_offset : NULL;
+        PVOID kv = MsmBoKernelVa(Al->Bo);
+        return kv != NULL ? (PUCHAR)kv + Al->Desc.bo_offset : NULL;
     }
     return (PUCHAR)Al->ApVa;
 }
@@ -682,6 +683,9 @@ static NTSTATUS APIENTRY TgCreateAllocation(const HANDLE hAdapter, DXGKARG_CREAT
                 return STATUS_INVALID_PARAMETER;
             }
         }
+        if ((al->Desc.flags & XUNGPU_ALLOC_F_PRIMARY) && al->Bo != NULL && al->Bo->ScanoutPa == 0) {
+            MsmBoKernelVa(al->Bo);
+        }
         ai->hAllocation = al;
         ai->Alignment = 0;
         ai->Size = al->Size;
@@ -697,7 +701,7 @@ static NTSTATUS APIENTRY TgCreateAllocation(const HANDLE hAdapter, DXGKARG_CREAT
         ai->AllocationPriority = D3DDDI_ALLOCATIONPRIORITY_NORMAL;
         ai->Flags.Value = 0;
         ai->Flags.CpuVisible = 1;
-        if (++count <= 120 || d == NULL) {
+        if (++count <= 32 || d == NULL) {
             LogPrint("CreateAllocation %p: kind %u %ux%u pitch %u fmt %u bo %u size %u%s%s\n", al, al->Desc.kind,
                      al->Desc.width, al->Desc.height, al->Desc.pitch, al->Desc.format, al->Desc.bo, (ULONG)al->Size,
                      (al->Desc.flags & XUNGPU_ALLOC_F_PRIMARY) ? " primary" : "", d == NULL ? " (no desc)" : "");
@@ -746,7 +750,7 @@ static NTSTATUS APIENTRY TgDescribeAllocation(const HANDLE hAdapter, DXGKARG_DES
             A->Rotation = (D3DDDI_ROTATION)pathRot;
         }
     }
-    if (++count <= 500) {
+    if (++count <= 32) {
         LogPrint("DescribeAllocation %p: kind %u %ux%u fmt %u rot %u -> %uHz (bo=%p)\n",
                  al, al->Desc.kind, A->Width, A->Height, A->Format, (ULONG)A->Rotation, A->RefreshRate.Numerator, al->Bo);
     }
