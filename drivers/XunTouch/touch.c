@@ -521,7 +521,7 @@ static VOID TouchProcess(PDEVICE_CONTEXT Ctx, const UCHAR *Buf,
 
   slots = (statusByte == 0xFF || td == 0 || td > TS_MAX_CONTACTS)
               ? 0
-              : TS_MAX_CONTACTS;
+              : td;
   for (i = 0; i < slots; i++) {
     const UCHAR *p = Buf + 2 + 6 * i;
     UCHAR event = p[0] >> 6;

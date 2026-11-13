@@ -620,7 +620,7 @@ static BOOLEAN SmmuSetup(VOID)
     Wr(g_Smmu, SMMU_CB0 + 0x024, (ULONG)(g_L1Pa.QuadPart >> 32));   /* TTBR0, ASID 0 */
     /* TCR: T0SZ 32 = 4 GB GPU VA (walk starts at level 1, 4 entries), 4 KB granule,
        non-cacheable walks, EPD1. TCR2: PASize 32-bit (<4 GB DDR bus port on SM6225). */
-    Wr(g_Smmu, SMMU_CB0 + 0x030, 32 | (1u << 23));
+    Wr(g_Smmu, SMMU_CB0 + 0x030, 25 | (1u << 23));
     Wr(g_Smmu, SMMU_CB0 + 0x010, 0);
     Wr(g_Smmu, SMMU_CB0 + 0x038, 0x44);                  /* MAIR0: attr0 = Normal non-cacheable */
     Wr(g_Smmu, SMMU_CB0 + 0x03C, 0);
@@ -632,7 +632,7 @@ static BOOLEAN SmmuSetup(VOID)
         TlbFlush();
         Wr(g_Smmu, SMMU_CB0 + 0x000, 0x65);              /* SCTLR: CFIE | CFRE | AFE | M (abort on fault) */
         Wr(g_Smmu, 0xC00, 0);                            /* S2CR0 -> CB0 */
-        Wr(g_Smmu, 0x800, (1u << 31) | (1u << 16));      /* SMR0: SID 0 mask 1 */
+        Wr(g_Smmu, 0x800, (1u << 31) | (0x7FFFu << 16)); /* SMR0: match all GPU stream IDs */
         g_SmmuOn = TRUE;
         TlbFlush();
     } else {

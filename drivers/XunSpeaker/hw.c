@@ -398,9 +398,7 @@ static VOID AmpOn(BOOLEAN On)
             if (!g_AmpInit) {
                 status = Fs1815InitOne(fsAddrs[k]);
             }
-            if ((g_FsDevId[k] & 0xFFu) == 0x11u) {
-                (VOID)TaI2cWrite16(fsAddrs[k], 0xBC, 0x9433);
-            }
+            (VOID)TaI2cWrite16(fsAddrs[k], 0xBC, 0x9433);
             (VOID)TaI2cWrite16(fsAddrs[k], 0x11, 0x008F);   /* Boost/PLL/Class-D enable */
             status = TaI2cWrite16(fsAddrs[k], 0x10, 0x0000);/* Power UP / unmute */
             (VOID)TaI2cWrite16(fsAddrs[k], 0x06, 0xFF00);   /* 0 dB volume */
