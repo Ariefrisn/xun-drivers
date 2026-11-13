@@ -478,10 +478,10 @@ NTSTATUS TouchHwInit(PDEVICE_CONTEXT Ctx) {
     Ctx->Flip180 = TRUE;
     LogPrint("touch 180-deg flip: enabled (touch.flip)\n");
   } else {
-    Ctx->Flip180 = !FileExists(L"\\??\\C:\\xun\\disp.noflip");
+    Ctx->Flip180 = FileExists(L"\\??\\C:\\xun\\disp.noflip");
     LogPrint("touch 180-deg flip: %s\n",
-             Ctx->Flip180 ? "enabled (synced with disp 180-deg flip)"
-                          : "disabled (disp.noflip)");
+             Ctx->Flip180 ? "enabled (synced with disp.noflip)"
+                          : "disabled (synced with disp flip)");
   }
 
   Ctx->HwReady = TRUE;
