@@ -18,6 +18,10 @@ VOID LogOpen(VOID)
         g_LogLockInit = TRUE;
     }
 
+    if (g_LogFile != NULL) {
+        return;
+    }
+
     RtlInitUnicodeString(&path, L"\\??\\C:\\XunBluetooth.log");
     InitializeObjectAttributes(&oa, &path, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
     st = ZwCreateFile(&g_LogFile,
@@ -63,7 +67,9 @@ VOID LogPrint(PCSTR Fmt, ...)
     if (g_LogFile != NULL && KeGetCurrentIrql() == PASSIVE_LEVEL) {
         RtlStringCbLengthA(stamped, sizeof(stamped), &len);
         if (len > 0) {
-            ZwWriteFile(g_LogFile, NULL, NULL, NULL, &iosb, stamped, (ULONG)len, NULL, NULL);
+            if (NT_SUCCESS(ZwWriteFile(g_LogFile, NULL, NULL, NULL, &iosb, stamped, (ULONG)len, NULL, NULL))) {
+                ZwFlushBuffersFile(g_LogFile, &iosb);
+            }
         }
     } else {
         UNREFERENCED_PARAMETER(oldIrql);

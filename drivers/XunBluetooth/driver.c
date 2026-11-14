@@ -200,6 +200,7 @@ static NTSTATUS BtEvtD0Entry(WDFDEVICE Device,
     return STATUS_DEVICE_NOT_READY;
   }
 
+  LogOpen();
   ctx->StopRequested = FALSE;
   ctx->FwReady = FALSE;
   ctx->InitFailed = FALSE;
@@ -234,5 +235,6 @@ static NTSTATUS BtEvtD0Exit(WDFDEVICE Device,
     ctx->WorkerThread = NULL;
   }
   ctx->FwReady = FALSE;
+  LogClose();
   return STATUS_SUCCESS;
 }
