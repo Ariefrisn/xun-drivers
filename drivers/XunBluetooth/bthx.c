@@ -13,8 +13,24 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
     NTSTATUS st;
     ULONGLONG nowMs = GetTicksMs();
     BOOLEAN idleNeedWake = (Ctx->LastTxActivityMs != 0 && (nowMs - Ctx->LastTxActivityMs) > 150ULL);
+    BOOLEAN wasAsleep = Ctx->ChipUartAsleep;
+    ULONG evtBefore = Ctx->RxEvents;
 
-    if (!Ctx->TxAwake || Ctx->ChipUartAsleep || idleNeedWake) {
+    if (Ctx->ChipUartAsleep) {
+        UCHAR wake = HCI_IBS_WAKE_IND;
+        UCHAR rx[64];
+        ULONG n;
+        LogPrint("wcn: waking chip before CMD (ChipUartAsleep=1)\n");
+        (VOID)UartWriteSync(Ctx, &wake, 1, 20);
+        SleepMs(10);
+        while ((n = UartReadPoll(Ctx, rx, sizeof(rx))) > 0) {
+            BthxFeedRxBytes(Ctx, rx, n);
+        }
+        MmioWrite32(&Ctx->Se, SE_GENI_S_IRQ_CLEAR, 0xFFFFFFFFu);
+        MmioWrite32(&Ctx->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFFu);
+        Ctx->ChipUartAsleep = FALSE;
+        Ctx->TxAwake = TRUE;
+    } else if (!Ctx->TxAwake || idleNeedWake) {
         UCHAR wake = HCI_IBS_WAKE_IND;
         ULONGLONG startMs = nowMs;
         ULONGLONG lastTxMs = 0;
@@ -75,6 +91,41 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
     }
 
     st = UartWriteSync(Ctx, txBuf, 1 + Len, 500);
+    if (NT_SUCCESS(st) && wasAsleep && PktType == HCI_PKT_CMD && Len >= 2 && Payload[0] == 0x24 && Payload[1] == 0x0C) {
+        ULONGLONG waitStart = GetTicksMs();
+        UCHAR rx[64];
+        while (Ctx->RxEvents == evtBefore && !Ctx->StopRequested && (GetTicksMs() - waitStart) < 200ULL) {
+            ULONG n = UartReadPoll(Ctx, rx, sizeof(rx));
+            if (n > 0) {
+                BthxFeedRxBytes(Ctx, rx, n);
+            } else {
+                SleepMs(1);
+            }
+        }
+        if (Ctx->RxEvents == evtBefore && !Ctx->StopRequested) {
+            UCHAR wake = HCI_IBS_WAKE_IND;
+            LogPrint("wcn: CMD 24 0c no EVT in 200ms after wake; retrying once\n");
+            (VOID)UartWriteSync(Ctx, &wake, 1, 20);
+            SleepMs(10);
+            (VOID)UartWriteSync(Ctx, txBuf, 1 + Len, 500);
+            waitStart = GetTicksMs();
+            while (Ctx->RxEvents == evtBefore && !Ctx->StopRequested && (GetTicksMs() - waitStart) < 200ULL) {
+                ULONG n = UartReadPoll(Ctx, rx, sizeof(rx));
+                if (n > 0) {
+                    BthxFeedRxBytes(Ctx, rx, n);
+                } else {
+                    SleepMs(1);
+                }
+            }
+            if (Ctx->RxEvents == evtBefore && !Ctx->StopRequested) {
+                LogPrint("wcn: CMD 24 0c still silent; probing 115200 baud fallback\n");
+                (VOID)UartSetBaud(Ctx, 115200);
+                (VOID)UartWriteSync(Ctx, &wake, 1, 20);
+                SleepMs(10);
+                (VOID)UartWriteSync(Ctx, txBuf, 1 + Len, 500);
+            }
+        }
+    }
     ExFreePoolWithTag(txBuf, XUN_BT_POOL_TAG);
     Ctx->LastTxActivityMs = GetTicksMs();
     if (PktType == HCI_PKT_CMD) {
