@@ -2,6 +2,8 @@
 #include <stdarg.h>
 #include <ntstrsafe.h>
 
+NTSYSAPI NTSTATUS NTAPI ZwFlushBuffersFile(HANDLE FileHandle, PIO_STATUS_BLOCK IoStatusBlock);
+
 static HANDLE    g_LogFile = NULL;
 static KSPIN_LOCK g_LogLock;
 static BOOLEAN   g_LogLockInit = FALSE;
