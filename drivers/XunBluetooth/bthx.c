@@ -91,10 +91,10 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
     }
 
     st = UartWriteSync(Ctx, txBuf, 1 + Len, 500);
-    if (NT_SUCCESS(st) && wasAsleep && PktType == HCI_PKT_CMD && Len >= 2 && Payload[0] == 0x24 && Payload[1] == 0x0C) {
+    if (NT_SUCCESS(st) && wasAsleep && PktType == HCI_PKT_CMD) {
         ULONGLONG waitStart = GetTicksMs();
         UCHAR rx[64];
-        while (Ctx->RxEvents == evtBefore && !Ctx->StopRequested && (GetTicksMs() - waitStart) < 200ULL) {
+        while (Ctx->RxEvents == evtBefore && !Ctx->StopRequested && (GetTicksMs() - waitStart) < 100ULL) {
             ULONG n = UartReadPoll(Ctx, rx, sizeof(rx));
             if (n > 0) {
                 BthxFeedRxBytes(Ctx, rx, n);
@@ -102,28 +102,13 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
                 SleepMs(1);
             }
         }
-        if (Ctx->RxEvents == evtBefore && !Ctx->StopRequested) {
+        if (Ctx->RxEvents == evtBefore && !Ctx->StopRequested && Ctx->CurrentBaud != 115200u) {
             UCHAR wake = HCI_IBS_WAKE_IND;
-            LogPrint("wcn: CMD 24 0c no EVT in 200ms after wake; retrying once\n");
+            LogPrint("wcn: CMD no EVT in 100ms; switching to 115200 baud fallback\n");
+            (VOID)UartSetBaud(Ctx, 115200u);
             (VOID)UartWriteSync(Ctx, &wake, 1, 20);
-            SleepMs(10);
+            SleepMs(5);
             (VOID)UartWriteSync(Ctx, txBuf, 1 + Len, 500);
-            waitStart = GetTicksMs();
-            while (Ctx->RxEvents == evtBefore && !Ctx->StopRequested && (GetTicksMs() - waitStart) < 200ULL) {
-                ULONG n = UartReadPoll(Ctx, rx, sizeof(rx));
-                if (n > 0) {
-                    BthxFeedRxBytes(Ctx, rx, n);
-                } else {
-                    SleepMs(1);
-                }
-            }
-            if (Ctx->RxEvents == evtBefore && !Ctx->StopRequested) {
-                LogPrint("wcn: CMD 24 0c still silent; probing 115200 baud fallback\n");
-                (VOID)UartSetBaud(Ctx, 115200);
-                (VOID)UartWriteSync(Ctx, &wake, 1, 20);
-                SleepMs(10);
-                (VOID)UartWriteSync(Ctx, txBuf, 1 + Len, 500);
-            }
         }
     }
     ExFreePoolWithTag(txBuf, XUN_BT_POOL_TAG);
@@ -298,9 +283,13 @@ VOID BthxFeedRxBytes(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len)
                 MmioWrite32(&Ctx->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFFu);
                 Ctx->ChipUartAsleep = TRUE;
                 if (breakLogCount < 4) {
-                    LogPrint("h4: rx break 0x00 ignored (s_irq=%08x), ChipUartAsleep=1\n",
-                             Ctx->LastRxIrqSt);
+                    LogPrint("h4: rx break 0x00 (s_irq=%08x), switching baud=%u->115200\n",
+                             Ctx->LastRxIrqSt, Ctx->CurrentBaud);
                     breakLogCount++;
+                }
+                if (Ctx->CurrentBaud != 115200u) {
+                    (VOID)UartSetBaud(Ctx, 115200u);
+                    Ctx->ChipUartAsleep = FALSE;
                 }
                 continue;
             }

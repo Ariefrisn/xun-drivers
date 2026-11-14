@@ -425,19 +425,14 @@ static NTSTATUS PatchAndDownloadNvm(PXUN_BT_CONTEXT Ctx, PUCHAR Buf, ULONG Size)
                          tagData[5], tagData[4], tagData[3], tagData[2], tagData[1], tagData[0]);
             } else if (tagId == EDL_TAG_ID_HCI && tagLen >= 3) {
                 UCHAR h0 = tagData[0];
+                if (tagData - 4 >= data) {
+                    LogPrint("wcn: NVM tag17 pre[-4..-1]=%02x %02x %02x %02x\n",
+                             tagData[-4], tagData[-3], tagData[-2], tagData[-1]);
+                }
                 LogHexDump("wcn: NVM tag17 old", tagData, tagLen);
-                if (h0 == 15u) {
-                    tagData[0] = 14u;
-                    if (idx >= 2) {
-                        tagData[-2] &= (UCHAR)~0x80u;
-                    }
-                } else {
-                    tagData[0] &= (UCHAR)~0x80u;
-                    if (Ctx->IsWcn3950) {
-                        tagData[1] = Ctx->OperBaudCode;
-                    } else {
-                        tagData[2] = Ctx->OperBaudCode;
-                    }
+                tagData[0] = Ctx->OperBaudCode; /* 0x0E = 3000000 baud; keep tagData[1] unchanged */
+                if (tagData - 2 >= data) {
+                    tagData[-2] &= (UCHAR)~0x80u; /* clear IBS bit in true byte 0 */
                 }
                 LogPrint("wcn: patched NVM tag17 data[0..2]=%02x %02x %02x (was0=%02x baud=%u)\n",
                          tagData[0], tagData[1], tagData[2], h0, Ctx->OperBaudRate);
