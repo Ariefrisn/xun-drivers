@@ -7,7 +7,7 @@
 #include <BthXDDI.h>
 #include "hw.h"
 
-#define XUN_BT_VERSION   "v0.19"
+#define XUN_BT_VERSION   "v0.20"
 #define XUN_BT_POOL_TAG  'XBtU'
 
 typedef struct _MMIO_RANGE {
@@ -127,6 +127,8 @@ typedef struct _XUN_BT_CONTEXT {
     ULONG        LastRxIrqSt;
     ULONG        UnexpBytesLogged;
     ULONGLONG    LastTxCmdMs;
+    UCHAR        LastTxCmdBuf[260];
+    ULONG        LastTxCmdLen;
     BOOLEAN      AwaitingEvt;
     BOOLEAN      DiagProbed;
     BOOLEAN      RadioDead;

@@ -425,15 +425,9 @@ static NTSTATUS PatchAndDownloadNvm(PXUN_BT_CONTEXT Ctx, PUCHAR Buf, ULONG Size)
                          tagData[5], tagData[4], tagData[3], tagData[2], tagData[1], tagData[0]);
             } else if (tagId == EDL_TAG_ID_HCI && tagLen >= 3) {
                 UCHAR h0 = tagData[0];
-                if (tagData - 4 >= data) {
-                    LogPrint("wcn: NVM tag17 pre[-4..-1]=%02x %02x %02x %02x\n",
-                             tagData[-4], tagData[-3], tagData[-2], tagData[-1]);
-                }
                 LogHexDump("wcn: NVM tag17 old", tagData, tagLen);
-                tagData[0] = Ctx->OperBaudCode; /* 0x0E = 3000000 baud; keep tagData[1] unchanged */
-                if (tagData - 2 >= data) {
-                    tagData[-2] &= (UCHAR)~0x80u; /* clear IBS bit in true byte 0 */
-                }
+                tagData[0] &= (UCHAR)~0x80u; /* keep 0x15 HCI transport config, clear IBS bit */
+                tagData[1] = Ctx->OperBaudCode; /* 0x0E (matching v0.18) */
                 LogPrint("wcn: patched NVM tag17 data[0..2]=%02x %02x %02x (was0=%02x baud=%u)\n",
                          tagData[0], tagData[1], tagData[2], h0, Ctx->OperBaudRate);
             } else if (tagId == EDL_TAG_ID_DEEP_SLEEP && tagLen >= 1) {
@@ -479,25 +473,37 @@ static VOID SendHciResetBestEffort(PXUN_BT_CONTEXT Ctx)
     UCHAR evt[128];
     ULONG evtLen = 0;
     NTSTATUS st;
+    ULONG attempt;
 
-    st = UartWriteSync(Ctx, cmd, sizeof(cmd), 200);
-    if (!NT_SUCCESS(st)) {
-        LogPrint("wcn: HCI_Reset TX failed: %08x\n", st);
-        return;
-    }
-    /* Read events up to 1.5s looking for Command Complete 0x0C03 */
-    for (;;) {
-        st = ReadH4PacketSync(Ctx, &pktType, evt, sizeof(evt), &evtLen, 1500);
+    for (attempt = 0; attempt < 2; attempt++) {
+        st = UartWriteSync(Ctx, cmd, sizeof(cmd), 200);
         if (!NT_SUCCESS(st)) {
-            LogPrint("wcn: HCI_Reset CC wait failed: %08x\n", st);
+            LogPrint("wcn: HCI_Reset TX failed: %08x\n", st);
             return;
         }
-        LogHexDump("wcn: reset evt", evt, evtLen);
-        if (pktType == HCI_PKT_EVENT && evtLen >= 6 && evt[0] == HCI_EV_CMD_COMPLETE &&
-            evt[3] == 0x03 && evt[4] == 0x0C) {
-            LogPrint("wcn: HCI_Reset SUCCESS (status=%02x)\n", evt[5]);
-            return;
+        /* Read events up to 1.5s looking for Command Complete 0x0C03 */
+        for (;;) {
+            st = ReadH4PacketSync(Ctx, &pktType, evt, sizeof(evt), &evtLen, 1500);
+            if (!NT_SUCCESS(st)) {
+                LogPrint("wcn: HCI_Reset CC wait failed at %u baud: %08x\n", Ctx->CurrentBaud, st);
+                break;
+            }
+            LogHexDump("wcn: reset evt", evt, evtLen);
+            if (pktType == HCI_PKT_EVENT && evtLen >= 6 && evt[0] == HCI_EV_CMD_COMPLETE &&
+                evt[3] == 0x03 && evt[4] == 0x0C) {
+                LogPrint("wcn: HCI_Reset SUCCESS at %u baud (status=%02x)\n", Ctx->CurrentBaud, evt[5]);
+                return;
+            }
         }
+        if (attempt == 0 && Ctx->CurrentBaud != 115200u) {
+            LogPrint("wcn: HCI_Reset failed at %u baud; switching to 115200 baud and retrying\n",
+                     Ctx->CurrentBaud);
+            (VOID)UartSetBaud(Ctx, 115200u);
+            SleepMs(10);
+            UartFlushRx(Ctx);
+            continue;
+        }
+        break;
     }
 }
 

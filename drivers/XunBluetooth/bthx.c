@@ -89,6 +89,10 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
     if (Len > 0) {
         RtlCopyMemory(txBuf + 1, Payload, Len);
     }
+    if (PktType == HCI_PKT_CMD && (1 + Len) <= sizeof(Ctx->LastTxCmdBuf)) {
+        RtlCopyMemory(Ctx->LastTxCmdBuf, txBuf, 1 + Len);
+        Ctx->LastTxCmdLen = 1 + Len;
+    }
 
     st = UartWriteSync(Ctx, txBuf, 1 + Len, 500);
     if (NT_SUCCESS(st) && wasAsleep && PktType == HCI_PKT_CMD) {
