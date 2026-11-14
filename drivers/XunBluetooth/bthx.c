@@ -186,12 +186,15 @@ VOID BthxFeedRxBytes(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len)
                 p->Pos = 0;
                 p->Stage = H4_STAGE_HDR;
             } else {
-                LogPrint("h4: unexpected type byte %02x (ios=%08x st=%08x s_irq=%08x sw_ctrl=%u)\n",
-                         ch,
-                         MmioRead32(&Ctx->Se, SE_GENI_IOS),
-                         MmioRead32(&Ctx->Se, SE_GENI_STATUS),
-                         Ctx->LastRxIrqSt,
-                         MmioRead32(&Ctx->TlmmSwCtrl, TLMM_IO) & 1u);
+                Ctx->UnexpBytesLogged++;
+                if (Ctx->UnexpBytesLogged <= 16) {
+                    LogPrint("h4: unexpected type byte %02x (ios=%08x st=%08x s_irq=%08x sw_ctrl=%u)\n",
+                             ch,
+                             MmioRead32(&Ctx->Se, SE_GENI_IOS),
+                             MmioRead32(&Ctx->Se, SE_GENI_STATUS),
+                             Ctx->LastRxIrqSt,
+                             MmioRead32(&Ctx->TlmmSwCtrl, TLMM_IO) & 1u);
+                }
             }
         } else if (p->Stage == H4_STAGE_HDR) {
             p->Buf[p->Pos++] = ch;
