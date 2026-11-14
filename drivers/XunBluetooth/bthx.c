@@ -14,6 +14,27 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
     ULONG evtBefore;
 
     if (Ctx->ChipUartAsleep) {
+        UCHAR wake = HCI_IBS_WAKE_IND;
+        UCHAR rx[64];
+        ULONGLONG wakeStart = GetTicksMs();
+        ULONGLONG lastWakeTx = 0;
+        Ctx->TxAwake = FALSE;
+        while (!Ctx->TxAwake && !Ctx->StopRequested && (GetTicksMs() - wakeStart) < 100ULL) {
+            ULONGLONG now = GetTicksMs();
+            ULONG n;
+            if (lastWakeTx == 0 || (now - lastWakeTx) >= 10ULL) {
+                UartSetFlowControl(Ctx, TRUE);
+                (VOID)UartWriteSync(Ctx, &wake, 1, 50);
+                UartSetFlowControl(Ctx, FALSE);
+                lastWakeTx = now;
+            }
+            n = UartReadPoll(Ctx, rx, sizeof(rx));
+            if (n > 0) {
+                BthxFeedRxBytes(Ctx, rx, n);
+            } else {
+                SleepMs(1);
+            }
+        }
         Ctx->ChipUartAsleep = FALSE;
         Ctx->TxAwake = TRUE;
     }
