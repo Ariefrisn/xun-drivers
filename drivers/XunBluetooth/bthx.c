@@ -426,6 +426,7 @@ NTSTATUS BthxQueuesCreate(PXUN_BT_CONTEXT Ctx)
     WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&qcfg, WdfIoQueueDispatchParallel);
     qcfg.PowerManaged = WdfFalse;
     qcfg.EvtIoDeviceControl = BthxIoDeviceControl;
+    qcfg.EvtIoInternalDeviceControl = BthxIoInternalDeviceControl;
     st = WdfIoQueueCreate(Ctx->Device, &qcfg, WDF_NO_OBJECT_ATTRIBUTES, NULL);
     if (!NT_SUCCESS(st)) {
         return st;
@@ -592,7 +593,13 @@ VOID BthxIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutLen, size
     default:
         /* Forward any non-BTHX IOCTLs down the filter stack */
         {
+            static ULONG unkIoctlCount = 0;
             WDF_REQUEST_SEND_OPTIONS opts;
+            if (unkIoctlCount < 64) {
+                LogPrint("bthx: unknown IOCTL 0x%08x (in=%Iu out=%Iu)\n",
+                         IoControlCode, InLen, OutLen);
+                unkIoctlCount++;
+            }
             WdfRequestFormatRequestUsingCurrentType(Request);
             WDF_REQUEST_SEND_OPTIONS_INIT(&opts, WDF_REQUEST_SEND_OPTION_SEND_AND_FORGET);
             if (!WdfRequestSend(Request, WdfDeviceGetIoTarget(device), &opts)) {
@@ -600,6 +607,24 @@ VOID BthxIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutLen, size
             }
             return;
         }
+    }
+}
+
+VOID BthxIoInternalDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutLen, size_t InLen, ULONG IoControlCode)
+{
+    static ULONG intIoctlCount = 0;
+    WDFDEVICE device = WdfIoQueueGetDevice(Queue);
+    WDF_REQUEST_SEND_OPTIONS opts;
+
+    if (intIoctlCount < 64) {
+        LogPrint("bthx: internal IOCTL 0x%08x (in=%Iu out=%Iu)\n",
+                 IoControlCode, InLen, OutLen);
+        intIoctlCount++;
+    }
+    WdfRequestFormatRequestUsingCurrentType(Request);
+    WDF_REQUEST_SEND_OPTIONS_INIT(&opts, WDF_REQUEST_SEND_OPTION_SEND_AND_FORGET);
+    if (!WdfRequestSend(Request, WdfDeviceGetIoTarget(device), &opts)) {
+        WdfRequestComplete(Request, WdfRequestGetStatus(Request));
     }
 }
 

@@ -7,7 +7,7 @@
 #include <BthXDDI.h>
 #include "hw.h"
 
-#define XUN_BT_VERSION   "v0.20"
+#define XUN_BT_VERSION   "v0.21"
 #define XUN_BT_POOL_TAG  'XBtU'
 
 typedef struct _MMIO_RANGE {
@@ -159,6 +159,7 @@ VOID     WcnProbeDeadRadio(PXUN_BT_CONTEXT Ctx);
 /* bthx.c */
 NTSTATUS BthxQueuesCreate(PXUN_BT_CONTEXT Ctx);
 VOID     BthxIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutLen, size_t InLen, ULONG IoControlCode);
+VOID     BthxIoInternalDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutLen, size_t InLen, ULONG IoControlCode);
 VOID     BthxFeedRxBytes(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len);
 VOID     BthxDrainQueuesOnStop(PXUN_BT_CONTEXT Ctx);
 VOID     BthxProcessTxAndSleep(PXUN_BT_CONTEXT Ctx);
