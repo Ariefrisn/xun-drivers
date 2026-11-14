@@ -435,8 +435,13 @@ static NTSTATUS PatchAndDownloadNvm(PXUN_BT_CONTEXT Ctx, PUCHAR Buf, ULONG Size)
                          Ctx->OperBaudRate, Ctx->OperBaudCode, h0);
             } else if (tagId == EDL_TAG_ID_DEEP_SLEEP && tagLen >= 1) {
                 UCHAR b0 = tagData[0];
-                tagData[0] &= (UCHAR)~0x01u; /* disable deep sleep */
-                LogPrint("wcn: NVM tag27 deep_sleep=%02x (was %02x)\n", tagData[0], b0);
+                UCHAR b1 = (tagLen >= 2) ? tagData[1] : 0;
+                tagData[0] = 0; /* disable deep sleep */
+                if (tagLen >= 2) {
+                    tagData[1] = 0; /* disable WCN3950 secondary sleep/IBS mode */
+                }
+                LogPrint("wcn: NVM tag27 deep_sleep=%02x %02x (was %02x %02x, len=%u)\n",
+                         tagData[0], (tagLen >= 2) ? tagData[1] : 0, b0, b1, tagLen);
             }
             idx += sizeof(QCA_TLV_NVM_HDR) + tagLen;
         }
