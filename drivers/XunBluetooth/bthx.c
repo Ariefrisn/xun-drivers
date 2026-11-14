@@ -6,11 +6,29 @@
 #define XUN_MAX_HCI_ACL_SIZE 1021
 #define BTHX_VALID_WRITE_PKT(t) ((t) == HciPacketCommand || (t) == HciPacketAclData)
 
-/* Sends a single H4 frame directly to the controller (HCI_IBS sleep disabled). */
+/* Sends a single H4 frame directly to the controller, waking HCI_IBS if asleep. */
 static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Payload, ULONG Len)
 {
     UCHAR *txBuf;
     NTSTATUS st;
+
+    if (!Ctx->TxAwake) {
+        UCHAR wake = HCI_IBS_WAKE_IND;
+        ULONGLONG startMs = GetTicksMs();
+        UCHAR rx[64];
+        (VOID)UartWriteSync(Ctx, &wake, 1, 50);
+        while (!Ctx->TxAwake && !Ctx->StopRequested && (GetTicksMs() - startMs) < 150ULL) {
+            ULONG n = UartReadPoll(Ctx, rx, sizeof(rx));
+            if (n > 0) {
+                BthxFeedRxBytes(Ctx, rx, n);
+            } else {
+                SleepMs(1);
+            }
+        }
+        if (!Ctx->TxAwake) {
+            LogPrint("ibs: wake ack timeout\n");
+        }
+    }
 
     txBuf = (UCHAR *)ExAllocatePool2(POOL_FLAG_NON_PAGED, 1 + Len, XUN_BT_POOL_TAG);
     if (txBuf == NULL) {
@@ -168,6 +186,7 @@ VOID BthxFeedRxBytes(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len)
                 continue;
             }
             if (ch == HCI_IBS_SLEEP_IND) {
+                Ctx->TxAwake = FALSE;
                 continue;
             }
             if (ch == HCI_PKT_EVENT) {
@@ -406,7 +425,7 @@ VOID BthxIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutLen, size
                 return;
             }
         }
-        if (ctx->InitFailed) {
+        if (ctx->InitFailed || ctx->RadioDead) {
             WdfRequestComplete(Request, STATUS_DEVICE_NOT_READY);
             return;
         }

@@ -424,22 +424,18 @@ static NTSTATUS PatchAndDownloadNvm(PXUN_BT_CONTEXT Ctx, PUCHAR Buf, ULONG Size)
                 LogPrint("wcn: NVM BD_ADDR=%02x:%02x:%02x:%02x:%02x:%02x\n",
                          tagData[5], tagData[4], tagData[3], tagData[2], tagData[1], tagData[0]);
             } else if (tagId == EDL_TAG_ID_HCI && tagLen >= 3) {
-                tagData[0] &= (UCHAR)~0x80u; /* keep HCI_IBS disabled (no out-of-band PM/wake on Windows) */
+                tagData[0] |= 0x80u; /* enable HCI_IBS in-band sleep per Linux btqca.c */
                 if (Ctx->IsWcn3950) {
                     tagData[1] = Ctx->OperBaudCode;
                 } else {
                     tagData[2] = Ctx->OperBaudCode;
                 }
-                LogPrint("wcn: patched NVM tag17 (baud=%u code=%u ibs=0)\n",
+                LogPrint("wcn: patched NVM tag17 (baud=%u code=%u ibs=1)\n",
                          Ctx->OperBaudRate, Ctx->OperBaudCode);
             } else if (tagId == EDL_TAG_ID_DEEP_SLEEP && tagLen >= 1) {
                 UCHAR b0 = tagData[0];
-                UCHAR b1 = (tagLen >= 2) ? tagData[1] : 0;
-                UCHAR b2 = (tagLen >= 3) ? tagData[2] : 0;
-                tagData[0] = 0;
-                if (tagLen >= 2) tagData[1] = 0;
-                if (tagLen >= 3) tagData[2] = 0;
-                LogPrint("wcn: patched NVM tag27 (was %02x %02x %02x, now 00 00 00)\n", b0, b1, b2);
+                tagData[0] |= 0x01u;
+                LogPrint("wcn: NVM tag27 deep_sleep=%02x (was %02x)\n", tagData[0], b0);
             }
             idx += sizeof(QCA_TLV_NVM_HDR) + tagLen;
         }

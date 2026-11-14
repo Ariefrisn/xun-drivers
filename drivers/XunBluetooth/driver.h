@@ -7,7 +7,7 @@
 #include <BthXDDI.h>
 #include "hw.h"
 
-#define XUN_BT_VERSION   "v0.12"
+#define XUN_BT_VERSION   "v0.13"
 #define XUN_BT_POOL_TAG  'XBtU'
 
 typedef struct _MMIO_RANGE {
@@ -127,6 +127,7 @@ typedef struct _XUN_BT_CONTEXT {
     ULONGLONG    LastTxCmdMs;
     BOOLEAN      AwaitingEvt;
     BOOLEAN      DiagProbed;
+    BOOLEAN      RadioDead;
 } XUN_BT_CONTEXT, *PXUN_BT_CONTEXT;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(XUN_BT_CONTEXT, GetBtContext);

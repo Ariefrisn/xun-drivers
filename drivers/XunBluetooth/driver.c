@@ -57,6 +57,14 @@ static VOID BtWorkerThread(PVOID Context)
             break;
         }
 
+        if (ctx->AwaitingEvt && !ctx->RadioDead && (GetTicksMs() - ctx->LastTxCmdMs) > 8000ULL) {
+            ctx->RadioDead = TRUE;
+            LogPrint("bthx: radio unresponsive >8s; failing device cleanly so OS/WiFi/Shutdown do not hang\n");
+            BthxDrainQueuesOnStop(ctx);
+            WdfDeviceSetFailed(ctx->Device, WdfDeviceFailedNoRestart);
+            break;
+        }
+
         if (totalRead == 0) {
             LARGE_INTEGER timeout;
             timeout.QuadPart = -10000LL; /* 1 ms poll tick */
