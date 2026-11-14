@@ -120,6 +120,7 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
     if (PktType == HCI_PKT_CMD) {
         Ctx->LastTxCmdMs = Ctx->LastTxActivityMs;
         Ctx->AwaitingEvt = TRUE;
+        Ctx->CmdRetried = FALSE;
     }
     Ctx->TxPackets++;
     if (Ctx->TxPackets <= 128) {
@@ -193,6 +194,7 @@ static VOID DispatchCompletedPacket(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UC
 
     if (PktType == HCI_PKT_EVENT) {
         Ctx->AwaitingEvt = FALSE;
+        Ctx->CmdRetried = FALSE;
         Ctx->RxEvents++;
         if (Ctx->RxEvents <= 128) {
             LogHexDump("hci <- EVT", Data, Len);

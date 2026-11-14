@@ -57,17 +57,23 @@ static VOID BtWorkerThread(PVOID Context) {
       break;
     }
 
-    if (ctx->AwaitingEvt && !ctx->RadioDead && ctx->RxEvents == 0 &&
-        ctx->TxPackets >= 1 && ctx->CurrentBaud != 115200u &&
-        (GetTicksMs() - ctx->LastTxCmdMs) > 250ULL) {
+    if (ctx->AwaitingEvt && !ctx->RadioDead && !ctx->CmdRetried &&
+        (GetTicksMs() - ctx->LastTxCmdMs) > 300ULL) {
       static const UCHAR hciReset[4] = { HCI_PKT_CMD, 0x03, 0x0C, 0x00 };
       const UCHAR *resendBuf = (ctx->LastTxCmdLen > 0) ? ctx->LastTxCmdBuf : hciReset;
       ULONG resendLen = (ctx->LastTxCmdLen > 0) ? ctx->LastTxCmdLen : sizeof(hciReset);
-      LogPrint("bthx: no RX at 3M after 250ms, switching to 115200 baud and resending HCI_Reset\n");
-      (VOID)UartSetBaud(ctx, 115200u);
+      ULONG nextBaud = (ctx->CurrentBaud == 115200u)
+                           ? (ctx->OperBaudRate ? ctx->OperBaudRate : 3000000u)
+                           : 115200u;
+      UCHAR wake = HCI_IBS_WAKE_IND;
+      LogPrint("bthx: no EVT after 300ms at %u baud, toggling to %u baud and resending CMD\n",
+               ctx->CurrentBaud, nextBaud);
+      (VOID)UartSetBaud(ctx, nextBaud);
       UartFlushRx(ctx);
+      (VOID)UartWriteSync(ctx, &wake, 1, 20);
+      SleepMs(5);
       (VOID)UartWriteSync(ctx, resendBuf, resendLen, 500);
-      ctx->LastTxCmdMs = GetTicksMs();
+      ctx->CmdRetried = TRUE;
     }
 
     if (ctx->AwaitingEvt && !ctx->RadioDead &&
