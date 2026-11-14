@@ -189,7 +189,7 @@ static NTSTATUS SelectClockForBaud(PXUN_BT_CONTEXT Ctx, ULONG Baud, ULONG *OutCl
             if (f == 0 || f < req) {
                 continue;
             }
-            div = (f + req / 2) / req;
+            div = (f + req - 1) / req;
             if (div == 0) div = 1;
             if (div > SER_CLK_DIV_MAX) continue;
             actualReq = f / div;
@@ -226,7 +226,7 @@ static NTSTATUS SelectClockForBaud(PXUN_BT_CONTEXT Ctx, ULONG Baud, ULONG *OutCl
             ULONG actualReq;
             ULONG err;
             if (f < req) continue;
-            div = (f + req / 2) / req;
+            div = (f + req - 1) / req;
             if (div == 0) div = 1;
             if (div > SER_CLK_DIV_MAX) continue;
             actualReq = f / div;
@@ -493,11 +493,14 @@ NTSTATUS UartHwInit(PXUN_BT_CONTEXT Ctx)
         goto Fail;
     }
 
-    /* SM6225 QUPv3 GENI uses 16x oversampling (do not touch QUP wrap MMIO) */
-    Ctx->SamplingRate = 16;
-
     fwRev = MmioRead32(&Ctx->Se, GENI_FW_REVISION_RO);
     proto = (fwRev >> 8) & 0xFFu;
+    /* msm_geni_serial_config_baud_rate: 16x oversampling only for major > 2 || (major == 2 && minor >= 5), else 32x */
+    {
+        ULONG fwMaj = (fwRev >> 8) & 0xFFu;
+        ULONG fwMin = fwRev & 0xFFu;
+        Ctx->SamplingRate = (fwMaj > 2u || (fwMaj == 2u && fwMin >= 5u)) ? 16u : 32u;
+    }
     Ctx->TxDepth = (MmioRead32(&Ctx->Se, SE_HW_PARAM_0) >> 16) & 0x3Fu;
     Ctx->RxDepth = (MmioRead32(&Ctx->Se, SE_HW_PARAM_1) >> 16) & 0x3Fu;
     if (Ctx->TxDepth == 0) Ctx->TxDepth = 16;

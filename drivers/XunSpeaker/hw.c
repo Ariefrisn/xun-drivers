@@ -202,7 +202,8 @@ static NTSTATUS CodecBringUp(VOID)
     SwrWr(VA_SWR, 1, 0x3408, 0x07); SwrWr(VA_SWR, 1, 0x3409, 0x0D); SwrWr(VA_SWR, 1, 0x344F, 0x01);
     SwrWr(VA_SWR, 1, 0x344E, 0x04); SwrWr(VA_SWR, 1, 0x3133, 0x06); SwrWr(VA_SWR, 1, 0x3414, 0x02);
     TaSleep(5);
-    SwrWr(VA_SWR, 1, 0x30A4, 0x00);                 /* ear_dac_event PRE_PMU clears bit 2 (0x04 = power-down) */
+    SwrWr(VA_SWR, 1, 0x30A4, 0x00);                 /* ear_dac_event PRE_PMU clears bit 2 */
+    SwrWr(VA_SWR, 1, 0x30A4, 0x01);                 /* ear_dac_event POST_PMU sets bit 0 (EAR DAC enable) */
     SwrWr(VA_SWR, 1, 0x3450, 0x01);                 /* RDAC3_MUX = RX1 */
     SwrWr(VA_SWR, 1, 0x340B, 0x95);                 /* AUX PATH Mode = HP_MODE (bit 6 = 0) */
     SwrWr(VA_SWR, 1, 0x3465, 0x13);
@@ -239,19 +240,20 @@ static VOID PortsAndPa(VOID)
     static const ULONG slv[][2] = {
         { 0x103, 7 }, { 0x130, 1 }, { 0x132, 7 }, { 0x133, 0 }, { 0x134, 3 },   /* Port 1: HPHL/EAR (ch 0xE, offset 3) */
         { 0x203, 7 }, { 0x230, 1 }, { 0x232, 0x1F }, { 0x233, 0 }, { 0x234, 0 }, { 0x236, 0x36 }, /* Port 2: CLSH */
-        { 0x430, 1 }, { 0x432, 7 }, { 0x433, 0 }, { 0x434, 1 }                  /* Port 4: LO/AUX (ch 0x13, offset 1) */
+        { 0x403, 7 }, { 0x430, 1 }, { 0x432, 7 }, { 0x433, 0 }, { 0x434, 1 }    /* Port 4: LO/AUX (ch 0x13, offset 1) */
     };
     ULONG i;
 
     TaWr(RX_SWR + 0x1164, 0x01000307); TaWr(RX_SWR + 0x117C, 0); TaWr(RX_SWR + 0x112C, 7); TaWr(RX_SWR + 0x1174, 0);
     TaWr(RX_SWR + 0x1264, 0x0100001F); TaWr(RX_SWR + 0x127C, 0); TaWr(RX_SWR + 0x122C, 7); TaWr(RX_SWR + 0x1274, 0x63);
-    TaWr(RX_SWR + 0x1464, 0x01000107); TaWr(RX_SWR + 0x147C, 0); TaWr(RX_SWR + 0x1474, 0);
+    TaWr(RX_SWR + 0x1464, 0x01000107); TaWr(RX_SWR + 0x147C, 0); TaWr(RX_SWR + 0x142C, 7); TaWr(RX_SWR + 0x1474, 0);
     for (i = 0; i < ARRAYSIZE(slv); i++) {
         SwrWr(RX_SWR, 1, slv[i][0], slv[i][1]);
     }
     TaWr(RX_SWR + 0x105C, 0x5000F);
     TaWr(RX_SWR + 0x300, (0x0Fu << 24) | (15u << 20) | (15u << 16) | 0x70);   /* broadcast bank switch */
     TaSleep(5);
+    SwrWr(VA_SWR, 1, 0x30A4, 0x05);                 /* enable_ear_pa sets bit 2 + ear_dac bit 0 */
     SwrWr(VA_SWR, 1, 0x3467, 0x05);
     SwrWr(VA_SWR, 1, 0x3128, 0x80);                 /* AUX PGA enable (bit 7), AUX PATH Mode = HP_MODE (bit 4 = 0) */
     SwrWr(VA_SWR, 1, 0x3008, 0xC3);                 /* RX_CTRL_0: HPH + EAR class-H / bias enable */
@@ -375,7 +377,8 @@ static NTSTATUS Fs1815InitOne(UCHAR Addr)
     (VOID)Fs1815UpdateBits(Addr, 0x19, 0, 5, ch);
     (VOID)TaI2cWrite16(Addr, 0x5A, 0xF8E0);
     (VOID)TaI2cWrite16(Addr, 0x1F, 0x0000);                 /* lock private regs */
-    st = TaI2cWrite16(Addr, 0x06, 0xFF00);                  /* 0 dB volume */
+    (VOID)TaI2cWrite16(Addr, 0x06, 0xFF00);                 /* 0 dB volume */
+    st = TaI2cWrite16(Addr, 0x16, 0xFF80);                  /* fs1815 volume reg 0x16 (fsm_config_vol bit 5) */
     return st;
 }
 
@@ -452,6 +455,7 @@ static VOID AmpOn(BOOLEAN On)
             (VOID)TaI2cWrite16(g_FsAddrs[k], 0x11, 0x008F);     /* Boost/PLL/Class-D enable */
             status = TaI2cWrite16(g_FsAddrs[k], 0x10, 0x0000);  /* Power UP / unmute */
             (VOID)TaI2cWrite16(g_FsAddrs[k], 0x06, 0xFF00);     /* 0 dB volume */
+            (VOID)TaI2cWrite16(g_FsAddrs[k], 0x16, 0xFF80);     /* fs1815 volume reg 0x16 */
         } else {
             status = TaI2cWrite16(g_FsAddrs[k], 0x10, 0x0001);  /* Power down */
             (VOID)TaI2cWrite16(g_FsAddrs[k], 0x11, 0x0000);     /* Boost off */
