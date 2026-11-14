@@ -424,9 +424,19 @@ static NTSTATUS PatchAndDownloadNvm(PXUN_BT_CONTEXT Ctx, PUCHAR Buf, ULONG Size)
                 LogPrint("wcn: NVM BD_ADDR=%02x:%02x:%02x:%02x:%02x:%02x\n",
                          tagData[5], tagData[4], tagData[3], tagData[2], tagData[1], tagData[0]);
             } else if (tagId == EDL_TAG_ID_HCI && tagLen >= 3) {
+                UCHAR h0 = tagData[0];
                 LogHexDump("wcn: NVM tag17 orig", tagData, tagLen);
+                tagData[0] &= (UCHAR)~0x85u;
+                tagData[1] = Ctx->OperBaudCode;
+                LogPrint("wcn: NVM tag17 patched[0..1]=%02x %02x (was0=%02x baud=%u, keep[2]=%02x)\n",
+                         tagData[0], tagData[1], h0, Ctx->OperBaudRate, tagData[2]);
             } else if (tagId == EDL_TAG_ID_DEEP_SLEEP && tagLen >= 1) {
                 LogHexDump("wcn: NVM tag27 orig", tagData, tagLen);
+                tagData[0] = 0x00;
+                if (tagLen >= 2) {
+                    tagData[1] = 0x00;
+                }
+                LogPrint("wcn: NVM tag27 patched[0..1]=00 00 (len=%u)\n", tagLen);
             }
             idx += sizeof(QCA_TLV_NVM_HDR) + tagLen;
         }

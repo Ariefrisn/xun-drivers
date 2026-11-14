@@ -81,6 +81,7 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
         }
         if (Ctx->RxEvents == evtBefore && Ctx->CurrentBaud != 115200u && !Ctx->StopRequested) {
             LogPrint("wcn: CMD no EVT in 100ms at %u; switching to 115200 baud and resending\n", Ctx->CurrentBaud);
+            UartLogHwState(Ctx, "cmd-timeout");
             (VOID)UartSetBaud(Ctx, 115200u);
             UartFlushRx(Ctx);
             Ctx->LastTxCmdMs = GetTicksMs();
