@@ -253,7 +253,7 @@ static VOID PortsAndPa(VOID)
     TaWr(RX_SWR + 0x105C, 0x5000F);
     TaWr(RX_SWR + 0x300, (0x0Fu << 24) | (15u << 20) | (15u << 16) | 0x70);   /* broadcast bank switch */
     TaSleep(5);
-    SwrWr(VA_SWR, 1, 0x30A4, 0x05);                 /* enable_ear_pa sets bit 2 + ear_dac bit 0 */
+    SwrWr(VA_SWR, 1, 0x30A4, 0x01);                 /* EAR DAC enable (bit 0); keep bit 2 (0x04=POST_PMD power-down) clear */
     SwrWr(VA_SWR, 1, 0x3467, 0x05);
     SwrWr(VA_SWR, 1, 0x3128, 0x80);                 /* AUX PGA enable (bit 7), AUX PATH Mode = HP_MODE (bit 4 = 0) */
     SwrWr(VA_SWR, 1, 0x3008, 0xC3);                 /* RX_CTRL_0: HPH + EAR class-H / bias enable */
