@@ -15,7 +15,7 @@
 #include "TlvGeneratorParser.hpp"
 #include "wlanif.h"
 
-#define XUN_WIFI_VERSION  "v0.29"
+#define XUN_WIFI_VERSION  "v0.30"
 #define XUN_WIFI_TAG      'iWzT'
 
 #define WLOG(...)           LogPrint (__VA_ARGS__)

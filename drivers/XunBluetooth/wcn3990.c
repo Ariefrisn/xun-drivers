@@ -513,7 +513,7 @@ NTSTATUS WcnInitializeRadio(PXUN_BT_CONTEXT Ctx)
         return STATUS_CANCELLED;
     }
 
-    for (attempt = 0; attempt < 2; attempt++) {
+    for (attempt = 0; attempt < 10; attempt++) {
         if (Ctx->StopRequested) {
             return STATUS_CANCELLED;
         }
@@ -538,9 +538,10 @@ NTSTATUS WcnInitializeRadio(PXUN_BT_CONTEXT Ctx)
         if (NT_SUCCESS(st)) {
             break;
         }
-        if (attempt == 0) {
-            LogPrint("wcn: EDL version attempt 1 failed (%08x), waiting for LDO rails and retrying\n", st);
-            SleepMs(1000);
+        if (attempt < 9) {
+            LogPrint("wcn: EDL version attempt %d failed (%08x), waiting for LDO rails and retrying\n",
+                     attempt + 1, st);
+            SleepMs(1500);
         }
     }
     if (!NT_SUCCESS(st)) {
