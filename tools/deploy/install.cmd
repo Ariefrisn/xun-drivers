@@ -28,14 +28,16 @@ if not defined DEVCON (
   exit /b 1
 )
 
-for %%c in ("%DRV%\XunTouch\xun-woa-test.cer" "%DRV%\XunGpuW\xun-woa-test.cer" "%DRV%\XunDisplay\xun-woa-test.cer" "C:\xun\xun-woa-test.cer") do (
-  if exist "%%~c" (
-    certutil -addstore -f Root "%%~c" >> "%L%" 2>&1
-    certutil -addstore -f TrustedPublisher "%%~c" >> "%L%" 2>&1
-    goto :cert_done
+for /d %%d in ("%DRV%\*") do (
+  if exist "%%~d\xun-woa-test.cer" (
+    certutil -addstore -f Root "%%~d\xun-woa-test.cer" >> "%L%" 2>&1
+    certutil -addstore -f TrustedPublisher "%%~d\xun-woa-test.cer" >> "%L%" 2>&1
   )
 )
-:cert_done
+if exist "C:\xun\xun-woa-test.cer" (
+  certutil -addstore -f Root "C:\xun\xun-woa-test.cer" >> "%L%" 2>&1
+  certutil -addstore -f TrustedPublisher "C:\xun\xun-woa-test.cer" >> "%L%" 2>&1
+)
 
 if exist "C:\xun\umd\xungpu_d3d10.dll" (
   copy /y "C:\xun\umd\xungpu_d3d10.dll" "%SystemRoot%\System32\xungpu_d3d10.dll" >> "%L%" 2>&1
@@ -98,9 +100,11 @@ if exist "C:\xun\fw\image\modem.mdt" if exist "%DRV%\XunWifi\XunWifi.inf" (
   )
 )
 
-if exist "%~dp0bt_fw" xcopy /e /i /y /q "%~dp0bt_fw" C:\xun\fw\bt >> "%L%" 2>&1
+if /i not "%~dp0"=="C:\xun\" (
+  if exist "%~dp0bt_fw" xcopy /e /i /y /q "%~dp0bt_fw" C:\xun\fw\bt >> "%L%" 2>&1
+  if exist "%~dp0fw\bt" xcopy /e /i /y /q "%~dp0fw\bt" C:\xun\fw\bt >> "%L%" 2>&1
+)
 if exist "%DRV%\XunBluetooth\bt_fw" xcopy /e /i /y /q "%DRV%\XunBluetooth\bt_fw" C:\xun\fw\bt >> "%L%" 2>&1
-if exist "%~dp0fw\bt" xcopy /e /i /y /q "%~dp0fw\bt" C:\xun\fw\bt >> "%L%" 2>&1
 
 for %%d in (XunAudio XunSpeaker XunBluetooth) do (
   if exist "%DRV%\%%d\%%d.inf" (
@@ -117,7 +121,7 @@ for %%d in (XunAudio XunSpeaker XunBluetooth) do (
 
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Scheduler" /v EnablePreemption /t REG_DWORD /d 0 /f >> "%L%" 2>&1
 
-powershell -NoProfile -Command "Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Enum\ROOT\SYSTEM' -ErrorAction SilentlyContinue | ForEach-Object { $h = (Get-ItemProperty $_.PSPath -Name HardwareID -ErrorAction SilentlyContinue).HardwareID; if ($h -and $h[0] -like 'ROOT\Xun*') { [pscustomobject]@{ Name=$_.PSChildName; Hw=$h[0] } } } | Group-Object Hw | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Group | Sort-Object Name | Select-Object -Skip 1 | ForEach-Object { & pnputil /remove-device ('ROOT\SYSTEM\' + $_.Name) } }" >> "%L%" 2>&1
+powershell -NoProfile -Command "foreach ($cls in @('ROOT\SYSTEM','ROOT\MEDIA','ROOT\Bluetooth')) { Get-ChildItem ('HKLM:\SYSTEM\CurrentControlSet\Enum\' + $cls) -ErrorAction SilentlyContinue | ForEach-Object { $h = (Get-ItemProperty $_.PSPath -Name HardwareID -ErrorAction SilentlyContinue).HardwareID; if ($h -and $h[0] -like 'ROOT\Xun*') { [pscustomobject]@{ Id=($cls + '\' + $_.PSChildName); Name=$_.PSChildName; Hw=$h[0] } } } | Group-Object Hw | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Group | Sort-Object Name | Select-Object -Skip 1 | ForEach-Object { & pnputil /remove-device $_.Id } } }" >> "%L%" 2>&1
 
 powercfg /change monitor-timeout-ac 0 >> "%L%" 2>&1
 powercfg /change monitor-timeout-dc 0 >> "%L%" 2>&1
