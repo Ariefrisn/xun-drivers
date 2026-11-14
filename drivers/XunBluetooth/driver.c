@@ -40,6 +40,7 @@ static VOID BtWorkerThread(PVOID Context)
         ULONG n;
 
         BthxProcessTxAndSleep(ctx);
+        BthxFlushCompletedReads(ctx);
 
         /* Drain all immediately available RX FIFO bytes before sleeping */
         do {
@@ -49,6 +50,8 @@ static VOID BtWorkerThread(PVOID Context)
                 totalRead += n;
             }
         } while (n > 0 && !ctx->StopRequested && totalRead < 4096);
+
+        BthxFlushCompletedReads(ctx);
 
         if (ctx->StopRequested) {
             break;

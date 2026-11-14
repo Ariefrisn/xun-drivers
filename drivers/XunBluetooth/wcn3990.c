@@ -539,9 +539,11 @@ NTSTATUS WcnInitializeRadio(PXUN_BT_CONTEXT Ctx)
             break;
         }
         if (attempt < 9) {
+            LARGE_INTEGER to;
+            to.QuadPart = -15000000LL; /* 1.5 s, interruptible on StopEvent */
             LogPrint("wcn: EDL version attempt %d failed (%08x), waiting for LDO rails and retrying\n",
                      attempt + 1, st);
-            SleepMs(1500);
+            KeWaitForSingleObject(&Ctx->StopEvent, Executive, KernelMode, FALSE, &to);
         }
     }
     if (!NT_SUCCESS(st)) {

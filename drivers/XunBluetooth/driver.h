@@ -7,7 +7,7 @@
 #include <BthXDDI.h>
 #include "hw.h"
 
-#define XUN_BT_VERSION   "v0.7"
+#define XUN_BT_VERSION   "v0.8"
 #define XUN_BT_POOL_TAG  'XBtU'
 
 typedef struct _MMIO_RANGE {
@@ -148,4 +148,5 @@ VOID     BthxIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutLen, 
 VOID     BthxFeedRxBytes(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len);
 VOID     BthxDrainQueuesOnStop(PXUN_BT_CONTEXT Ctx);
 VOID     BthxProcessTxAndSleep(PXUN_BT_CONTEXT Ctx);
+VOID     BthxFlushCompletedReads(PXUN_BT_CONTEXT Ctx);
 

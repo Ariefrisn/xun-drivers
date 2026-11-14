@@ -101,7 +101,7 @@ static NTSTATUS TryCompleteOneRead(PXUN_BT_CONTEXT Ctx, WDFQUEUE Queue, PLIST_EN
     return STATUS_SUCCESS;
 }
 
-static VOID FlushCompletedReads(PXUN_BT_CONTEXT Ctx)
+VOID BthxFlushCompletedReads(PXUN_BT_CONTEXT Ctx)
 {
     while (TryCompleteOneRead(Ctx, Ctx->ReadEventQueue, &Ctx->RxEventList, &Ctx->RxEventCount) == STATUS_SUCCESS) {
     }
@@ -160,7 +160,7 @@ static VOID DispatchCompletedPacket(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UC
     }
     WdfSpinLockRelease(Ctx->Lock);
 
-    FlushCompletedReads(Ctx);
+    BthxFlushCompletedReads(Ctx);
 }
 
 VOID BthxFeedRxBytes(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len)
@@ -459,7 +459,7 @@ VOID BthxIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutLen, size
                 return;
             }
             if (ctx->FwReady) {
-                FlushCompletedReads(ctx);
+                KeSetEvent(&ctx->WorkEvent, IO_NO_INCREMENT, FALSE);
             }
             return;
         }

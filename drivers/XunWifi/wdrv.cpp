@@ -18,6 +18,7 @@ static EVT_WDF_DEVICE_D0_ENTRY EvtD0Entry;
 static EVT_WDF_DEVICE_D0_EXIT EvtD0Exit;
 
 static volatile LONG s_ModemActive = 0;
+static volatile LONG s_WifiDeviceAdded = 0;
 
 /* TRUE if Path exists (and Delete: it is deleted). */
 static BOOLEAN FileProbe(PCWSTR Path, BOOLEAN Delete)
@@ -196,6 +197,10 @@ static NTSTATUS EvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
     NTSTATUS status;
 
     UNREFERENCED_PARAMETER(Driver);
+    if (InterlockedCompareExchange(&s_WifiDeviceAdded, 1, 0) != 0) {
+        WLOG("duplicate wifi device node detected, rejecting\r\n");
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
     GuardLeave();
     status = NetDeviceInitConfig(DeviceInit);          /* data path: NetAdapterCx */
     WLOG("NetDeviceInitConfig: %08x\r\n", status);
