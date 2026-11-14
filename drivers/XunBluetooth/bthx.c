@@ -15,18 +15,42 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
     if (!Ctx->TxAwake) {
         UCHAR wake = HCI_IBS_WAKE_IND;
         ULONGLONG startMs = GetTicksMs();
+        ULONGLONG lastTxMs = 0;
+        ULONG txTries = 0;
         UCHAR rx[64];
-        (VOID)UartWriteSync(Ctx, &wake, 1, 50);
-        while (!Ctx->TxAwake && !Ctx->StopRequested && (GetTicksMs() - startMs) < 150ULL) {
-            ULONG n = UartReadPoll(Ctx, rx, sizeof(rx));
-            if (n > 0) {
-                BthxFeedRxBytes(Ctx, rx, n);
-            } else {
-                SleepMs(1);
+
+        while (!Ctx->TxAwake && !Ctx->StopRequested) {
+            ULONGLONG now = GetTicksMs();
+            if ((now - startMs) >= 300ULL) {
+                break;
+            }
+            if (txTries == 0 || (now - lastTxMs) >= 25ULL) {
+                st = UartWriteSync(Ctx, &wake, 1, 20);
+                if (!NT_SUCCESS(st)) {
+                    if (txTries == 0) {
+                        LogPrint("ibs: wake tx st=0x%08X, pulsing without flow\n", (ULONG)st);
+                    }
+                    UartSetFlowControl(Ctx, TRUE);
+                    st = UartWriteSync(Ctx, &wake, 1, 20);
+                    UartSetFlowControl(Ctx, FALSE);
+                }
+                lastTxMs = now;
+                txTries++;
+            }
+            {
+                ULONG n = UartReadPoll(Ctx, rx, sizeof(rx));
+                if (n > 0) {
+                    BthxFeedRxBytes(Ctx, rx, n);
+                } else {
+                    SleepMs(1);
+                }
             }
         }
         if (!Ctx->TxAwake) {
-            LogPrint("ibs: wake ack timeout\n");
+            LogPrint("ibs: wake ack timeout (tries=%lu)\n", txTries);
+            UartLogHwState(Ctx, "ibs-timeout");
+        } else {
+            LogPrint("ibs: woke after %lu tries (%I64u ms)\n", txTries, GetTicksMs() - startMs);
         }
     }
 
@@ -176,16 +200,29 @@ VOID BthxFeedRxBytes(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len)
         UCHAR ch = Data[i];
 
         if (p->Stage == H4_STAGE_TYPE) {
+            static ULONG ibsLogCount = 0;
             if (ch == HCI_IBS_WAKE_IND) {
                 UCHAR ack = HCI_IBS_WAKE_ACK;
+                if (ibsLogCount < 16) {
+                    LogPrint("ibs: rx WAKE_IND (0xFD)\n");
+                    ibsLogCount++;
+                }
                 (VOID)UartWriteSync(Ctx, &ack, 1, 50);
                 continue;
             }
             if (ch == HCI_IBS_WAKE_ACK) {
+                if (ibsLogCount < 16) {
+                    LogPrint("ibs: rx WAKE_ACK (0xFC)\n");
+                    ibsLogCount++;
+                }
                 Ctx->TxAwake = TRUE;
                 continue;
             }
             if (ch == HCI_IBS_SLEEP_IND) {
+                if (ibsLogCount < 16) {
+                    LogPrint("ibs: rx SLEEP_IND (0xFE)\n");
+                    ibsLogCount++;
+                }
                 Ctx->TxAwake = FALSE;
                 continue;
             }
