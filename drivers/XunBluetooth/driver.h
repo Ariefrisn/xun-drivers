@@ -7,7 +7,7 @@
 #include <BthXDDI.h>
 #include "hw.h"
 
-#define XUN_BT_VERSION   "v0.16"
+#define XUN_BT_VERSION   "v0.17"
 #define XUN_BT_POOL_TAG  'XBtU'
 
 typedef struct _MMIO_RANGE {
@@ -115,8 +115,10 @@ typedef struct _XUN_BT_CONTEXT {
 
     /* HCI_IBS TX state */
     BOOLEAN      TxAwake;
+    BOOLEAN      ChipUartAsleep;
     ULONGLONG    LastTxActivityMs;
     ULONGLONG    LastWakeReqMs;
+    ULONGLONG    LastKeepAliveMs;
     ULONG        TxPackets;
     ULONG        RxEvents;
     ULONG        RxAcls;

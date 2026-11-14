@@ -425,23 +425,18 @@ static NTSTATUS PatchAndDownloadNvm(PXUN_BT_CONTEXT Ctx, PUCHAR Buf, ULONG Size)
                          tagData[5], tagData[4], tagData[3], tagData[2], tagData[1], tagData[0]);
             } else if (tagId == EDL_TAG_ID_HCI && tagLen >= 3) {
                 UCHAR h0 = tagData[0];
-                tagData[0] &= (UCHAR)~0x80u; /* disable HCI_IBS so controller never powers down UART */
+                tagData[0] = 0x00u; /* disable all sleep/IBS bits in byte 0 */
                 if (Ctx->IsWcn3950) {
                     tagData[1] = Ctx->OperBaudCode;
                 } else {
                     tagData[2] = Ctx->OperBaudCode;
                 }
-                LogPrint("wcn: patched NVM tag17 (baud=%u code=%u ibs=0 was=%02x)\n",
-                         Ctx->OperBaudRate, Ctx->OperBaudCode, h0);
+                LogPrint("wcn: patched NVM tag17 data[0..2]=%02x %02x %02x (was0=%02x baud=%u)\n",
+                         tagData[0], tagData[1], tagData[2], h0, Ctx->OperBaudRate);
             } else if (tagId == EDL_TAG_ID_DEEP_SLEEP && tagLen >= 1) {
-                UCHAR b0 = tagData[0];
-                UCHAR b1 = (tagLen >= 2) ? tagData[1] : 0;
-                tagData[0] = 0; /* disable deep sleep */
-                if (tagLen >= 2) {
-                    tagData[1] = 0; /* disable WCN3950 secondary sleep/IBS mode */
-                }
-                LogPrint("wcn: NVM tag27 deep_sleep=%02x %02x (was %02x %02x, len=%u)\n",
-                         tagData[0], (tagLen >= 2) ? tagData[1] : 0, b0, b1, tagLen);
+                LogHexDump("wcn: NVM tag27 old", tagData, tagLen);
+                RtlZeroMemory(tagData, tagLen);
+                LogPrint("wcn: NVM tag27 zeroed (%u bytes)\n", tagLen);
             }
             idx += sizeof(QCA_TLV_NVM_HDR) + tagLen;
         }
