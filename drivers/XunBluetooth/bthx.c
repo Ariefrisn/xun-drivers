@@ -193,15 +193,24 @@ static VOID DispatchCompletedPacket(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UC
     PBT_RX_PACKET pkt;
 
     if (PktType == HCI_PKT_EVENT) {
+        static ULONG leAdvLogCount = 0;
+        static ULONG evtLogCount = 0;
+        BOOLEAN isLeAdv = (Len >= 3 && Data[0] == 0x3Eu && (Data[2] == 0x02u || Data[2] == 0x0Du));
         Ctx->AwaitingEvt = FALSE;
         Ctx->CmdRetried = FALSE;
         Ctx->RxEvents++;
-        if (Ctx->RxEvents <= 128) {
+        if (isLeAdv) {
+            if (leAdvLogCount < 16) {
+                LogHexDump("hci <- EVT", Data, Len);
+                leAdvLogCount++;
+            }
+        } else if (evtLogCount < 512) {
             LogHexDump("hci <- EVT", Data, Len);
+            evtLogCount++;
         }
     } else if (PktType == HCI_PKT_ACL) {
         Ctx->RxAcls++;
-        if (Ctx->RxAcls <= 32) {
+        if (Ctx->RxAcls <= 128) {
             LogHexDump("hci <- ACL", Data, Len);
         }
     } else {
@@ -288,14 +297,10 @@ VOID BthxFeedRxBytes(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len)
                             Ctx->LastRxIrqSt ? Ctx->LastRxIrqSt : 0xFFFFFFFFu);
                 MmioWrite32(&Ctx->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFFu);
                 Ctx->ChipUartAsleep = TRUE;
-                if (breakLogCount < 4) {
-                    LogPrint("h4: rx break 0x00 (s_irq=%08x), switching baud=%u->115200\n",
+                if (breakLogCount < 16) {
+                    LogPrint("h4: rx break 0x00 (s_irq=%08x, baud=%u)\n",
                              Ctx->LastRxIrqSt, Ctx->CurrentBaud);
                     breakLogCount++;
-                }
-                if (Ctx->CurrentBaud != 115200u) {
-                    (VOID)UartSetBaud(Ctx, 115200u);
-                    Ctx->ChipUartAsleep = FALSE;
                 }
                 continue;
             }

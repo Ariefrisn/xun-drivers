@@ -426,14 +426,14 @@ static NTSTATUS PatchAndDownloadNvm(PXUN_BT_CONTEXT Ctx, PUCHAR Buf, ULONG Size)
             } else if (tagId == EDL_TAG_ID_HCI && tagLen >= 3) {
                 UCHAR h0 = tagData[0];
                 LogHexDump("wcn: NVM tag17 old", tagData, tagLen);
-                tagData[0] &= (UCHAR)~0x80u; /* keep 0x15 HCI transport config, clear IBS bit */
-                tagData[1] = Ctx->OperBaudCode; /* 0x0E (matching v0.18) */
+                tagData[0] &= (UCHAR)~0x81u;
+                tagData[1] = Ctx->OperBaudCode;
                 LogPrint("wcn: patched NVM tag17 data[0..2]=%02x %02x %02x (was0=%02x baud=%u)\n",
                          tagData[0], tagData[1], tagData[2], h0, Ctx->OperBaudRate);
             } else if (tagId == EDL_TAG_ID_DEEP_SLEEP && tagLen >= 1) {
                 LogHexDump("wcn: NVM tag27 old", tagData, tagLen);
-                RtlZeroMemory(tagData, tagLen);
-                LogPrint("wcn: NVM tag27 zeroed (%u bytes)\n", tagLen);
+                tagData[0] = 0x00;
+                LogPrint("wcn: patched NVM tag27 data[0]=%02x (len=%u)\n", tagData[0], tagLen);
             }
             idx += sizeof(QCA_TLV_NVM_HDR) + tagLen;
         }
