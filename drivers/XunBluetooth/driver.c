@@ -59,10 +59,21 @@ static VOID BtWorkerThread(PVOID Context) {
 
     if (ctx->AwaitingEvt && !ctx->RadioDead && !ctx->CmdRetried &&
         (GetTicksMs() - ctx->LastTxCmdMs) > 300ULL) {
-      LogPrint("bthx: no EVT after 300ms at %u baud (ios=%08x st=%08x)\n",
-               ctx->CurrentBaud,
+      ULONG nextBaud = (ctx->CurrentBaud == 115200u)
+                           ? (ctx->OperBaudRate ? ctx->OperBaudRate : 3000000u)
+                           : 115200u;
+      LogPrint("bthx: no EVT after 300ms at %u baud, trying %u baud (ios=%08x st=%08x)\n",
+               ctx->CurrentBaud, nextBaud,
                MmioRead32(&ctx->Se, SE_GENI_IOS),
                MmioRead32(&ctx->Se, SE_GENI_STATUS));
+      (VOID)UartSetBaud(ctx, nextBaud);
+      UartFlushRx(ctx);
+      if (ctx->LastTxCmdLen > 0 && ctx->LastTxCmdLen <= sizeof(ctx->LastTxCmdBuf)) {
+        UCHAR resendBuf[sizeof(ctx->LastTxCmdBuf)];
+        ULONG resendLen = ctx->LastTxCmdLen;
+        RtlCopyMemory(resendBuf, ctx->LastTxCmdBuf, resendLen);
+        (VOID)UartWriteSync(ctx, resendBuf, resendLen, 500);
+      }
       ctx->CmdRetried = TRUE;
     }
 

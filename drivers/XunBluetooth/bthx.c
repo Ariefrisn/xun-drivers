@@ -11,37 +11,9 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
 {
     UCHAR *txBuf;
     NTSTATUS st;
+    ULONG evtBefore;
 
     if (Ctx->ChipUartAsleep) {
-        UCHAR wake = HCI_IBS_WAKE_IND;
-        UCHAR rx[64];
-        ULONGLONG wakeStart = GetTicksMs();
-        ULONGLONG lastWakeTx = 0;
-        ULONG operBaud = Ctx->OperBaudRate ? Ctx->OperBaudRate : 3000000u;
-        LogPrint("wcn: waking chip before CMD (ChipUartAsleep=1)\n");
-        if (Ctx->CurrentBaud != operBaud) {
-            (VOID)UartSetBaud(Ctx, operBaud);
-        }
-        Ctx->TxAwake = FALSE;
-        while (!Ctx->TxAwake && !Ctx->StopRequested && (GetTicksMs() - wakeStart) < 100ULL) {
-            ULONGLONG now = GetTicksMs();
-            ULONG n;
-            if (lastWakeTx == 0 || (now - lastWakeTx) >= 10ULL) {
-                UartSetFlowControl(Ctx, TRUE);
-                (VOID)UartWriteSync(Ctx, &wake, 1, 50);
-                UartSetFlowControl(Ctx, FALSE);
-                lastWakeTx = now;
-            }
-            n = UartReadPoll(Ctx, rx, sizeof(rx));
-            if (n > 0) {
-                BthxFeedRxBytes(Ctx, rx, n);
-            } else {
-                SleepMs(1);
-            }
-        }
-        KeStallExecutionProcessor(500);
-        MmioWrite32(&Ctx->Se, SE_GENI_S_IRQ_CLEAR, 0xFFFFFFFFu);
-        MmioWrite32(&Ctx->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFFu);
         Ctx->ChipUartAsleep = FALSE;
         Ctx->TxAwake = TRUE;
     }
@@ -59,7 +31,26 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
         Ctx->LastTxCmdLen = 1 + Len;
     }
 
+    evtBefore = Ctx->RxEvents;
     st = UartWriteSync(Ctx, txBuf, 1 + Len, 500);
+    if (PktType == HCI_PKT_CMD && NT_SUCCESS(st)) {
+        ULONGLONG waitStart = GetTicksMs();
+        UCHAR rx[128];
+        while (Ctx->RxEvents == evtBefore && !Ctx->StopRequested && (GetTicksMs() - waitStart) < 100ULL) {
+            ULONG n = UartReadPoll(Ctx, rx, sizeof(rx));
+            if (n > 0) {
+                BthxFeedRxBytes(Ctx, rx, n);
+            } else {
+                SleepMs(1);
+            }
+        }
+        if (Ctx->RxEvents == evtBefore && Ctx->CurrentBaud != 115200u && !Ctx->StopRequested) {
+            LogPrint("wcn: CMD no EVT in 100ms at %u; switching to 115200 baud and resending\n", Ctx->CurrentBaud);
+            (VOID)UartSetBaud(Ctx, 115200u);
+            UartFlushRx(Ctx);
+            (VOID)UartWriteSync(Ctx, txBuf, 1 + Len, 500);
+        }
+    }
     ExFreePoolWithTag(txBuf, XUN_BT_POOL_TAG);
     Ctx->LastTxActivityMs = GetTicksMs();
     if (PktType == HCI_PKT_CMD) {
