@@ -424,17 +424,18 @@ static NTSTATUS PatchAndDownloadNvm(PXUN_BT_CONTEXT Ctx, PUCHAR Buf, ULONG Size)
                 LogPrint("wcn: NVM BD_ADDR=%02x:%02x:%02x:%02x:%02x:%02x\n",
                          tagData[5], tagData[4], tagData[3], tagData[2], tagData[1], tagData[0]);
             } else if (tagId == EDL_TAG_ID_HCI && tagLen >= 3) {
-                tagData[0] |= 0x80u; /* enable HCI_IBS in-band sleep per Linux btqca.c */
+                UCHAR h0 = tagData[0];
+                tagData[0] &= (UCHAR)~0x80u; /* disable HCI_IBS so controller never powers down UART */
                 if (Ctx->IsWcn3950) {
                     tagData[1] = Ctx->OperBaudCode;
                 } else {
                     tagData[2] = Ctx->OperBaudCode;
                 }
-                LogPrint("wcn: patched NVM tag17 (baud=%u code=%u ibs=1)\n",
-                         Ctx->OperBaudRate, Ctx->OperBaudCode);
+                LogPrint("wcn: patched NVM tag17 (baud=%u code=%u ibs=0 was=%02x)\n",
+                         Ctx->OperBaudRate, Ctx->OperBaudCode, h0);
             } else if (tagId == EDL_TAG_ID_DEEP_SLEEP && tagLen >= 1) {
                 UCHAR b0 = tagData[0];
-                tagData[0] |= 0x01u;
+                tagData[0] &= (UCHAR)~0x01u; /* disable deep sleep */
                 LogPrint("wcn: NVM tag27 deep_sleep=%02x (was %02x)\n", tagData[0], b0);
             }
             idx += sizeof(QCA_TLV_NVM_HDR) + tagLen;
