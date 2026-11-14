@@ -433,7 +433,13 @@ static NTSTATUS PatchAndDownloadNvm(PXUN_BT_CONTEXT Ctx, PUCHAR Buf, ULONG Size)
                 LogPrint("wcn: patched NVM tag17 (baud=%u code=%u ibs=0)\n",
                          Ctx->OperBaudRate, Ctx->OperBaudCode);
             } else if (tagId == EDL_TAG_ID_DEEP_SLEEP && tagLen >= 1) {
-                tagData[0] &= (UCHAR)~0x01u; /* keep controller awake in D0 */
+                UCHAR b0 = tagData[0];
+                UCHAR b1 = (tagLen >= 2) ? tagData[1] : 0;
+                UCHAR b2 = (tagLen >= 3) ? tagData[2] : 0;
+                tagData[0] = 0;
+                if (tagLen >= 2) tagData[1] = 0;
+                if (tagLen >= 3) tagData[2] = 0;
+                LogPrint("wcn: patched NVM tag27 (was %02x %02x %02x, now 00 00 00)\n", b0, b1, b2);
             }
             idx += sizeof(QCA_TLV_NVM_HDR) + tagLen;
         }
@@ -609,6 +615,9 @@ NTSTATUS WcnInitializeRadio(PXUN_BT_CONTEXT Ctx)
     }
 
     SendHciResetBestEffort(Ctx);
+    LogPrint("wcn: post-reset ios=%08x sw_ctrl=%u\n",
+             MmioRead32(&Ctx->Se, SE_GENI_IOS),
+             MmioRead32(&Ctx->TlmmSwCtrl, TLMM_IO) & 1u);
     Ctx->TxAwake = TRUE;
     Ctx->LastTxActivityMs = GetTicksMs();
     return STATUS_SUCCESS;

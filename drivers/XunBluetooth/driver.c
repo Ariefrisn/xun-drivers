@@ -189,10 +189,11 @@ static NTSTATUS BtEvtD0Exit(WDFDEVICE Device, WDF_POWER_DEVICE_STATE TargetState
 {
     PXUN_BT_CONTEXT ctx = GetBtContext(Device);
 
-    UNREFERENCED_PARAMETER(TargetState);
-
+    LogPrint("D0Exit target=%u\n", (ULONG)TargetState);
     ctx->StopRequested = TRUE;
+    BthxDrainQueuesOnStop(ctx);
     KeSetEvent(&ctx->StopEvent, IO_NO_INCREMENT, FALSE);
+    KeSetEvent(&ctx->WorkEvent, IO_NO_INCREMENT, FALSE);
     if (ctx->WorkerThread != NULL) {
         KeWaitForSingleObject(ctx->WorkerThread, Executive, KernelMode, FALSE, NULL);
         ObDereferenceObject(ctx->WorkerThread);
