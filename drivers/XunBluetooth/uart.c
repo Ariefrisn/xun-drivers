@@ -143,11 +143,13 @@ static NTSTATUS GccProgramDirectRcg(PXUN_BT_CONTEXT Ctx, ULONG TargetRate)
         MmioWrite32(&Ctx->GccQupS3, rcgOff + RCG_N_OFF, 0);
         MmioWrite32(&Ctx->GccQupS3, rcgOff + RCG_D_OFF, 0);
     } else {
-        if (TargetRate == 7372800u)       { m = 384; n = 15625; }
-        else if (TargetRate == 14745600u) { m = 768; n = 15625; }
-        else if (TargetRate == 48000000u) { m = 4;   n = 25; }
-        else if (TargetRate == 64000000u) { m = 16;  n = 75; }
-        else if (TargetRate == 102400000u){ m = 128; n = 375; }
+        if (TargetRate == 7372800u)       { m = 384;  n = 15625; }
+        else if (TargetRate == 14745600u) { m = 768;  n = 15625; }
+        else if (TargetRate == 29491200u) { m = 1536; n = 15625; }
+        else if (TargetRate == 48000000u) { m = 4;    n = 25; }
+        else if (TargetRate == 64000000u) { m = 16;   n = 75; }
+        else if (TargetRate == 96000000u) { m = 8;    n = 25; }
+        else if (TargetRate == 102400000u){ m = 128;  n = 375; }
         else { return STATUS_INVALID_PARAMETER; }
 
         /* src=1 (300 MHz GPLL0_OUT_EVEN), pre_div=1, dual-edge MND mode (2 << 12) */
@@ -192,6 +194,7 @@ static NTSTATUS SelectClockForBaud(PXUN_BT_CONTEXT Ctx, ULONG Baud, ULONG *OutCl
             if (div > SER_CLK_DIV_MAX) continue;
             actualReq = f / div;
             err = (actualReq > req) ? (actualReq - req) : (req - actualReq);
+            if ((ULONGLONG)err * 100ULL > (ULONGLONG)req * 2ULL) continue;
             if (err < bestErr) {
                 bestErr = err;
                 bestIdx = i;
@@ -212,7 +215,10 @@ static NTSTATUS SelectClockForBaud(PXUN_BT_CONTEXT Ctx, ULONG Baud, ULONG *OutCl
 
     /* Non-DFS: program RCG directly from khaje ftbl */
     {
-        static const ULONG kRates[] = { 7372800u, 14745600u, 19200000u, 48000000u, 64000000u, 102400000u };
+        static const ULONG kRates[] = {
+            7372800u, 14745600u, 19200000u, 29491200u,
+            48000000u, 64000000u, 96000000u, 102400000u
+        };
         NTSTATUS st;
         for (i = 0; i < ARRAYSIZE(kRates); i++) {
             ULONG f = kRates[i];
@@ -225,6 +231,7 @@ static NTSTATUS SelectClockForBaud(PXUN_BT_CONTEXT Ctx, ULONG Baud, ULONG *OutCl
             if (div > SER_CLK_DIV_MAX) continue;
             actualReq = f / div;
             err = (actualReq > req) ? (actualReq - req) : (req - actualReq);
+            if ((ULONGLONG)err * 100ULL > (ULONGLONG)req * 2ULL) continue;
             if (err < bestErr) {
                 bestErr = err;
                 bestDiv = div;
@@ -249,11 +256,9 @@ static NTSTATUS SelectClockForBaud(PXUN_BT_CONTEXT Ctx, ULONG Baud, ULONG *OutCl
 
 static VOID GeniConfigPacking(PXUN_BT_CONTEXT Ctx)
 {
-    /* 4 x 8-bit characters packed per 32-bit FIFO word, LSB first */
-    ULONG cfg0 = (7u << 0) | (0u << 4) | (0u << 5) |
-                 (15u << 10) | (0u << 14) | (0u << 15);
-    ULONG cfg1 = (23u << 0) | (0u << 4) | (0u << 5) |
-                 (31u << 10) | (1u << 14) | (0u << 15);
+    /* Linux geni_se_config_packing(se, 8, 4, false, true, true): LSB-first 4x8b per 32b FIFO word */
+    ULONG cfg0 = 0x0004380Eu;
+    ULONG cfg1 = 0x000C3E0Eu;
     MmioWrite32(&Ctx->Se, SE_GENI_TX_PACKING_CFG0, cfg0);
     MmioWrite32(&Ctx->Se, SE_GENI_TX_PACKING_CFG1, cfg1);
     MmioWrite32(&Ctx->Se, SE_GENI_RX_PACKING_CFG0, cfg0);
@@ -296,6 +301,9 @@ VOID UartSetFlowControl(PXUN_BT_CONTEXT Ctx, BOOLEAN DisableFlow)
     if (DisableFlow) {
         txCfg |= UART_CTS_MASK;
         MmioWrite32(&Ctx->Se, SE_UART_TX_TRANS_CFG, txCfg);
+        /* Two-step RFR deassertion per msm_geni_serial_set_manual_flow */
+        MmioWrite32(&Ctx->Se, SE_UART_MANUAL_RFR, UART_MANUAL_RFR_EN);
+        BusyWaitUs(100);
         MmioWrite32(&Ctx->Se, SE_UART_MANUAL_RFR, UART_MANUAL_RFR_EN | UART_RFR_NOT_READY);
     } else {
         txCfg &= ~UART_CTS_MASK;
@@ -524,7 +532,7 @@ NTSTATUS UartHwInit(PXUN_BT_CONTEXT Ctx)
     MmioWrite32(&Ctx->Se, SE_GSI_EVENT_EN, 0);
     MmioWrite32(&Ctx->Se, SE_GENI_BYTE_GRAN, 0);
 
-    rxRfr = (Ctx->RxDepth > 4) ? (Ctx->RxDepth - 4) : (Ctx->RxDepth - 1);
+    rxRfr = (Ctx->RxDepth > 2) ? (Ctx->RxDepth - 2) : 1;
     MmioWrite32(&Ctx->Se, SE_GENI_TX_WATERMARK_REG, 2);
     MmioWrite32(&Ctx->Se, SE_GENI_RX_WATERMARK_REG, 1);
     MmioWrite32(&Ctx->Se, SE_GENI_RX_RFR_WATERMARK_REG, rxRfr);
@@ -534,6 +542,7 @@ NTSTATUS UartHwInit(PXUN_BT_CONTEXT Ctx)
     MmioWrite32(&Ctx->Se, SE_IRQ_EN, 0);
 
     GeniConfigPacking(Ctx);
+    MmioWrite32(&Ctx->Se, SE_UART_IO_MACRO_CTRL, 0x431Cu);
 
     /* 8N1 framing, no loopback */
     MmioWrite32(&Ctx->Se, SE_UART_LOOPBACK_CFG, 0);

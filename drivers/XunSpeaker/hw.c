@@ -200,7 +200,7 @@ static NTSTATUS CodecBringUp(VOID)
     SwrWr(VA_SWR, 1, 0x340D, 0xBC); SwrWr(VA_SWR, 1, 0x340E, 0xBC); SwrWr(VA_SWR, 1, 0x340F, 0xBC);
     SwrWr(VA_SWR, 1, 0x3408, 0x03);
     SwrWr(VA_SWR, 1, 0x3408, 0x07); SwrWr(VA_SWR, 1, 0x3409, 0x0D); SwrWr(VA_SWR, 1, 0x344F, 0x01);
-    SwrWr(VA_SWR, 1, 0x344E, 0x04); SwrWr(VA_SWR, 1, 0x3133, 0x02); SwrWr(VA_SWR, 1, 0x3414, 0x02);
+    SwrWr(VA_SWR, 1, 0x344E, 0x04); SwrWr(VA_SWR, 1, 0x3133, 0x06); SwrWr(VA_SWR, 1, 0x3414, 0x02);
     TaSleep(5);
     SwrWr(VA_SWR, 1, 0x30A4, 0x00);                 /* ear_dac_event PRE_PMU clears bit 2 (0x04 = power-down) */
     SwrWr(VA_SWR, 1, 0x3450, 0x01);                 /* RDAC3_MUX = RX1 */
@@ -255,9 +255,9 @@ static VOID PortsAndPa(VOID)
     SwrWr(VA_SWR, 1, 0x3467, 0x05);
     SwrWr(VA_SWR, 1, 0x3128, 0x80);                 /* AUX PGA enable (bit 7), AUX PATH Mode = HP_MODE (bit 4 = 0) */
     SwrWr(VA_SWR, 1, 0x3008, 0xC3);                 /* RX_CTRL_0: HPH + EAR class-H / bias enable */
-    SwrWr(VA_SWR, 1, 0x3009, 0xCC);                 /* WCD937X_ANA_HPH: HPHL + HPHR PA enable */
+    SwrWr(VA_SWR, 1, 0x3009, 0x0C);                 /* WCD937X_ANA_HPH: keep HPH PAs off for speaker path */
     SwrWr(VA_SWR, 1, 0x300B, 0x92);                 /* WCD937X_ANA_EAR: PRE_PMU bit 7 + G_0_DB */
-    SwrWr(VA_SWR, 1, 0x300A, 0xC0);                 /* EAR PGA widget enable (bit 7 = 0x80 per wcd937x_dlkm) */
+    SwrWr(VA_SWR, 1, 0x300A, 0x40);                 /* Keep bit 7 (0x80) clear while active (pulsed only on POST_PMD) */
     TaSleep(6);                                     /* ear_pa POST_PMU 6ms settle */
     SwrWr(VA_SWR, 1, 0x346B, 0x4C);
     SwrWr(VA_SWR, 1, 0x346C, 0x7F);

@@ -108,6 +108,9 @@ for %%d in (XunAudio XunSpeaker XunBluetooth) do (
     if errorlevel 1 (
       "%DEVCON%" install "%DRV%\%%d\%%d.inf" Root\%%d >> "%L%" 2>&1
       echo %%d install exit !errorlevel! >> "%L%"
+    ) else (
+      "%DEVCON%" update "%DRV%\%%d\%%d.inf" Root\%%d >> "%L%" 2>&1
+      echo %%d update exit !errorlevel! >> "%L%"
     )
   )
 )
