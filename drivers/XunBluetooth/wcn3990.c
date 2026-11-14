@@ -427,6 +427,7 @@ static NTSTATUS PatchAndDownloadNvm(PXUN_BT_CONTEXT Ctx, PUCHAR Buf, ULONG Size)
                 UCHAR h0 = tagData[0];
                 LogHexDump("wcn: NVM tag17 old", tagData, tagLen);
                 tagData[0] &= (UCHAR)~0x85u;
+                tagData[1] = Ctx->OperBaudCode;
                 LogPrint("wcn: patched NVM tag17 data[0..2]=%02x %02x %02x (was0=%02x baud=%u)\n",
                          tagData[0], tagData[1], tagData[2], h0, Ctx->OperBaudRate);
             } else if (tagId == EDL_TAG_ID_DEEP_SLEEP && tagLen >= 1) {

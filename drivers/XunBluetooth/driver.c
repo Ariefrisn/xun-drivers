@@ -59,20 +59,10 @@ static VOID BtWorkerThread(PVOID Context) {
 
     if (ctx->AwaitingEvt && !ctx->RadioDead && !ctx->CmdRetried &&
         (GetTicksMs() - ctx->LastTxCmdMs) > 300ULL) {
-      static const UCHAR hciReset[4] = { HCI_PKT_CMD, 0x03, 0x0C, 0x00 };
-      const UCHAR *resendBuf = (ctx->LastTxCmdLen > 0) ? ctx->LastTxCmdBuf : hciReset;
-      ULONG resendLen = (ctx->LastTxCmdLen > 0) ? ctx->LastTxCmdLen : sizeof(hciReset);
-      ULONG nextBaud = (ctx->CurrentBaud == 115200u)
-                           ? (ctx->OperBaudRate ? ctx->OperBaudRate : 3000000u)
-                           : 115200u;
-      UCHAR wake = HCI_IBS_WAKE_IND;
-      LogPrint("bthx: no EVT after 300ms at %u baud, toggling to %u baud and resending CMD\n",
-               ctx->CurrentBaud, nextBaud);
-      (VOID)UartSetBaud(ctx, nextBaud);
-      UartFlushRx(ctx);
-      (VOID)UartWriteSync(ctx, &wake, 1, 20);
-      SleepMs(5);
-      (VOID)UartWriteSync(ctx, resendBuf, resendLen, 500);
+      LogPrint("bthx: no EVT after 300ms at %u baud (ios=%08x st=%08x)\n",
+               ctx->CurrentBaud,
+               MmioRead32(&ctx->Se, SE_GENI_IOS),
+               MmioRead32(&ctx->Se, SE_GENI_STATUS));
       ctx->CmdRetried = TRUE;
     }
 

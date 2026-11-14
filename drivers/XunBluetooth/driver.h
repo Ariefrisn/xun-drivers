@@ -7,7 +7,7 @@
 #include <BthXDDI.h>
 #include "hw.h"
 
-#define XUN_BT_VERSION   "v0.25"
+#define XUN_BT_VERSION   "v0.26"
 #define XUN_BT_POOL_TAG  'XBtU'
 
 typedef struct _MMIO_RANGE {

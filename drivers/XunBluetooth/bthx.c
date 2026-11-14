@@ -11,10 +11,6 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
 {
     UCHAR *txBuf;
     NTSTATUS st;
-    ULONGLONG nowMs = GetTicksMs();
-    BOOLEAN idleNeedWake = (Ctx->LastTxActivityMs != 0 && (nowMs - Ctx->LastTxActivityMs) > 150ULL);
-    BOOLEAN wasAsleep = Ctx->ChipUartAsleep;
-    ULONG evtBefore = Ctx->RxEvents;
 
     if (Ctx->ChipUartAsleep) {
         UCHAR wake = HCI_IBS_WAKE_IND;
@@ -31,7 +27,9 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
             ULONGLONG now = GetTicksMs();
             ULONG n;
             if (lastWakeTx == 0 || (now - lastWakeTx) >= 10ULL) {
+                UartSetFlowControl(Ctx, TRUE);
                 (VOID)UartWriteSync(Ctx, &wake, 1, 50);
+                UartSetFlowControl(Ctx, FALSE);
                 lastWakeTx = now;
             }
             n = UartReadPoll(Ctx, rx, sizeof(rx));
@@ -46,55 +44,6 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
         MmioWrite32(&Ctx->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFFu);
         Ctx->ChipUartAsleep = FALSE;
         Ctx->TxAwake = TRUE;
-    } else if (!Ctx->TxAwake || idleNeedWake) {
-        UCHAR wake = HCI_IBS_WAKE_IND;
-        ULONGLONG startMs = nowMs;
-        ULONGLONG lastTxMs = 0;
-        ULONG txTries = 0;
-        UCHAR rx[64];
-
-        if (Ctx->ChipUartAsleep || idleNeedWake) {
-            (VOID)UartWriteSync(Ctx, &wake, 1, 50);
-            SleepMs(5);
-            {
-                ULONG n = UartReadPoll(Ctx, rx, sizeof(rx));
-                if (n > 0) {
-                    BthxFeedRxBytes(Ctx, rx, n);
-                }
-            }
-            lastTxMs = GetTicksMs();
-            txTries = 1;
-        }
-
-        while (!Ctx->TxAwake && !Ctx->StopRequested && txTries < 3) {
-            ULONGLONG now = GetTicksMs();
-            if ((now - startMs) >= 150ULL) {
-                break;
-            }
-            if (txTries == 0 || (now - lastTxMs) >= 50ULL) {
-                st = UartWriteSync(Ctx, &wake, 1, 20);
-                if (!NT_SUCCESS(st)) {
-                    UartSetFlowControl(Ctx, TRUE);
-                    (VOID)UartWriteSync(Ctx, &wake, 1, 50);
-                    UartSetFlowControl(Ctx, FALSE);
-                }
-                lastTxMs = now;
-                txTries++;
-            }
-            {
-                ULONG n = UartReadPoll(Ctx, rx, sizeof(rx));
-                if (n > 0) {
-                    BthxFeedRxBytes(Ctx, rx, n);
-                } else {
-                    SleepMs(1);
-                }
-            }
-        }
-        if (!Ctx->TxAwake) {
-            LogPrint("ibs: no WAKE_ACK after %lu tries, forcing AWAKE for TX\n", txTries);
-        }
-        Ctx->TxAwake = TRUE;
-        Ctx->ChipUartAsleep = FALSE;
     }
 
     txBuf = (UCHAR *)ExAllocatePool2(POOL_FLAG_NON_PAGED, 1 + Len, XUN_BT_POOL_TAG);
@@ -111,42 +60,6 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
     }
 
     st = UartWriteSync(Ctx, txBuf, 1 + Len, 500);
-    if (NT_SUCCESS(st) && wasAsleep && PktType == HCI_PKT_CMD) {
-        ULONGLONG waitStart = GetTicksMs();
-        UCHAR rx[64];
-        while (Ctx->RxEvents == evtBefore && !Ctx->StopRequested && (GetTicksMs() - waitStart) < 100ULL) {
-            ULONG n = UartReadPoll(Ctx, rx, sizeof(rx));
-            if (n > 0) {
-                BthxFeedRxBytes(Ctx, rx, n);
-            } else {
-                SleepMs(1);
-            }
-        }
-        if (Ctx->RxEvents == evtBefore && !Ctx->StopRequested) {
-            UCHAR wake = HCI_IBS_WAKE_IND;
-            ULONGLONG retryStart;
-            (VOID)UartWriteSync(Ctx, &wake, 1, 50);
-            SleepMs(20);
-            (VOID)UartWriteSync(Ctx, txBuf, 1 + Len, 500);
-            retryStart = GetTicksMs();
-            while (Ctx->RxEvents == evtBefore && !Ctx->StopRequested && (GetTicksMs() - retryStart) < 100ULL) {
-                ULONG n = UartReadPoll(Ctx, rx, sizeof(rx));
-                if (n > 0) {
-                    BthxFeedRxBytes(Ctx, rx, n);
-                } else {
-                    SleepMs(1);
-                }
-            }
-        }
-        if (Ctx->RxEvents == evtBefore && !Ctx->StopRequested && Ctx->CurrentBaud != 115200u) {
-            UCHAR wake = HCI_IBS_WAKE_IND;
-            LogPrint("wcn: CMD no EVT in 100ms; switching to 115200 baud fallback\n");
-            (VOID)UartSetBaud(Ctx, 115200u);
-            (VOID)UartWriteSync(Ctx, &wake, 1, 50);
-            SleepMs(5);
-            (VOID)UartWriteSync(Ctx, txBuf, 1 + Len, 500);
-        }
-    }
     ExFreePoolWithTag(txBuf, XUN_BT_POOL_TAG);
     Ctx->LastTxActivityMs = GetTicksMs();
     if (PktType == HCI_PKT_CMD) {
@@ -300,7 +213,9 @@ VOID BthxFeedRxBytes(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len)
                     ibsLogCount++;
                 }
                 Ctx->ChipUartAsleep = FALSE;
+                UartSetFlowControl(Ctx, TRUE);
                 (VOID)UartWriteSync(Ctx, &ack, 1, 50);
+                UartSetFlowControl(Ctx, FALSE);
                 continue;
             }
             if (ch == HCI_IBS_WAKE_ACK) {
@@ -313,14 +228,12 @@ VOID BthxFeedRxBytes(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len)
                 continue;
             }
             if (ch == HCI_IBS_SLEEP_IND) {
-                UCHAR sleepAck = HCI_IBS_SLEEP_IND;
                 if (ibsLogCount < 64) {
                     LogPrint("ibs: rx SLEEP_IND (0xFE)\n");
                     ibsLogCount++;
                 }
                 Ctx->TxAwake = FALSE;
                 Ctx->ChipUartAsleep = TRUE;
-                (VOID)UartWriteSync(Ctx, &sleepAck, 1, 50);
                 continue;
             }
             if (ch == 0x00u &&
