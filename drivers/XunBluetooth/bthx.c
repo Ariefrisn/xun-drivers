@@ -44,7 +44,7 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
     ExFreePoolWithTag(txBuf, XUN_BT_POOL_TAG);
     Ctx->LastTxActivityMs = GetTicksMs();
     Ctx->TxPackets++;
-    if (Ctx->TxPackets <= 16) {
+    if (Ctx->TxPackets <= 64) {
         LogHexDump((PktType == HCI_PKT_CMD) ? "hci -> CMD" : "hci -> ACL", Payload, Len);
     }
     return st;
@@ -115,12 +115,12 @@ static VOID DispatchCompletedPacket(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UC
 
     if (PktType == HCI_PKT_EVENT) {
         Ctx->RxEvents++;
-        if (Ctx->RxEvents <= 16) {
+        if (Ctx->RxEvents <= 64) {
             LogHexDump("hci <- EVT", Data, Len);
         }
     } else if (PktType == HCI_PKT_ACL) {
         Ctx->RxAcls++;
-        if (Ctx->RxAcls <= 8) {
+        if (Ctx->RxAcls <= 32) {
             LogHexDump("hci <- ACL", Data, Len);
         }
     } else {

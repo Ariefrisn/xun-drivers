@@ -197,7 +197,8 @@ static NTSTATUS EvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
 
     UNREFERENCED_PARAMETER(Driver);
     if (!GuardEnter()) {
-        WLOG("boot guard: C:\\xun\\wifi.boot exists, the last start did not survive 20 s -> not starting\r\n");
+        GuardLeave();
+        WLOG("boot guard: C:\\xun\\wifi.boot existed -> cleared for next boot, skipping this start\r\n");
         return STATUS_UNSUCCESSFUL;
     }
     status = NetDeviceInitConfig(DeviceInit);          /* data path: NetAdapterCx */
