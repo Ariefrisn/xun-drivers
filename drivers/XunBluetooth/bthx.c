@@ -31,8 +31,22 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
         Ctx->LastTxCmdLen = 1 + Len;
     }
 
+    Ctx->LastTxActivityMs = GetTicksMs();
+    if (PktType == HCI_PKT_CMD) {
+        Ctx->LastTxCmdMs = Ctx->LastTxActivityMs;
+        Ctx->AwaitingEvt = TRUE;
+        Ctx->CmdRetried = FALSE;
+    }
+    Ctx->TxPackets++;
+    if (Ctx->TxPackets <= 128) {
+        LogHexDump((PktType == HCI_PKT_CMD) ? "hci -> CMD" : "hci -> ACL", Payload, Len);
+    }
+
     evtBefore = Ctx->RxEvents;
     st = UartWriteSync(Ctx, txBuf, 1 + Len, 500);
+    if (!NT_SUCCESS(st) && PktType == HCI_PKT_CMD) {
+        Ctx->AwaitingEvt = FALSE;
+    }
     if (PktType == HCI_PKT_CMD && NT_SUCCESS(st)) {
         ULONGLONG waitStart = GetTicksMs();
         UCHAR rx[128];
@@ -48,20 +62,11 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
             LogPrint("wcn: CMD no EVT in 100ms at %u; switching to 115200 baud and resending\n", Ctx->CurrentBaud);
             (VOID)UartSetBaud(Ctx, 115200u);
             UartFlushRx(Ctx);
+            Ctx->LastTxCmdMs = GetTicksMs();
             (VOID)UartWriteSync(Ctx, txBuf, 1 + Len, 500);
         }
     }
     ExFreePoolWithTag(txBuf, XUN_BT_POOL_TAG);
-    Ctx->LastTxActivityMs = GetTicksMs();
-    if (PktType == HCI_PKT_CMD) {
-        Ctx->LastTxCmdMs = Ctx->LastTxActivityMs;
-        Ctx->AwaitingEvt = TRUE;
-        Ctx->CmdRetried = FALSE;
-    }
-    Ctx->TxPackets++;
-    if (Ctx->TxPackets <= 128) {
-        LogHexDump((PktType == HCI_PKT_CMD) ? "hci -> CMD" : "hci -> ACL", Payload, Len);
-    }
     return st;
 }
 
