@@ -424,16 +424,16 @@ static NTSTATUS PatchAndDownloadNvm(PXUN_BT_CONTEXT Ctx, PUCHAR Buf, ULONG Size)
                 LogPrint("wcn: NVM BD_ADDR=%02x:%02x:%02x:%02x:%02x:%02x\n",
                          tagData[5], tagData[4], tagData[3], tagData[2], tagData[1], tagData[0]);
             } else if (tagId == EDL_TAG_ID_HCI && tagLen >= 3) {
-                tagData[0] |= 0x80u; /* enable HCI_IBS in-band sleep */
+                tagData[0] &= (UCHAR)~0x80u; /* keep HCI_IBS disabled (no out-of-band PM/wake on Windows) */
                 if (Ctx->IsWcn3950) {
                     tagData[1] = Ctx->OperBaudCode;
                 } else {
                     tagData[2] = Ctx->OperBaudCode;
                 }
-                LogPrint("wcn: patched NVM tag17 (baud=%u code=%u ibs=1)\n",
+                LogPrint("wcn: patched NVM tag17 (baud=%u code=%u ibs=0)\n",
                          Ctx->OperBaudRate, Ctx->OperBaudCode);
             } else if (tagId == EDL_TAG_ID_DEEP_SLEEP && tagLen >= 1) {
-                tagData[0] |= 0x01u;
+                tagData[0] &= (UCHAR)~0x01u; /* keep controller awake in D0 */
             }
             idx += sizeof(QCA_TLV_NVM_HDR) + tagLen;
         }

@@ -6,30 +6,11 @@
 #define XUN_MAX_HCI_ACL_SIZE 1021
 #define BTHX_VALID_WRITE_PKT(t) ((t) == HciPacketCommand || (t) == HciPacketAclData)
 
-/* Sends a single H4 frame to the controller, issuing HCI_IBS_WAKE_IND if idle. */
+/* Sends a single H4 frame directly to the controller (HCI_IBS sleep disabled). */
 static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Payload, ULONG Len)
 {
     UCHAR *txBuf;
     NTSTATUS st;
-    ULONGLONG now = GetTicksMs();
-
-    if (!Ctx->TxAwake || (now - Ctx->LastTxActivityMs) > 1500) {
-        UCHAR wake = HCI_IBS_WAKE_IND;
-        ULONGLONG waitStart;
-        (VOID)UartWriteSync(Ctx, &wake, 1, 50);
-        /* Poll briefly for HCI_IBS_WAKE_ACK (0xFC) while processing any RX bytes */
-        waitStart = GetTicksMs();
-        while (!Ctx->TxAwake && (GetTicksMs() - waitStart) < 25) {
-            UCHAR rx[64];
-            ULONG n = UartReadPoll(Ctx, rx, sizeof(rx));
-            if (n > 0) {
-                BthxFeedRxBytes(Ctx, rx, n);
-            } else {
-                SleepMs(1);
-            }
-        }
-        Ctx->TxAwake = TRUE;
-    }
 
     txBuf = (UCHAR *)ExAllocatePool2(POOL_FLAG_NON_PAGED, 1 + Len, XUN_BT_POOL_TAG);
     if (txBuf == NULL) {
@@ -44,7 +25,7 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
     ExFreePoolWithTag(txBuf, XUN_BT_POOL_TAG);
     Ctx->LastTxActivityMs = GetTicksMs();
     Ctx->TxPackets++;
-    if (Ctx->TxPackets <= 64) {
+    if (Ctx->TxPackets <= 128) {
         LogHexDump((PktType == HCI_PKT_CMD) ? "hci -> CMD" : "hci -> ACL", Payload, Len);
     }
     return st;
@@ -115,7 +96,7 @@ static VOID DispatchCompletedPacket(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UC
 
     if (PktType == HCI_PKT_EVENT) {
         Ctx->RxEvents++;
-        if (Ctx->RxEvents <= 64) {
+        if (Ctx->RxEvents <= 128) {
             LogHexDump("hci <- EVT", Data, Len);
         }
     } else if (PktType == HCI_PKT_ACL) {
@@ -271,13 +252,6 @@ VOID BthxProcessTxAndSleep(PXUN_BT_CONTEXT Ctx)
         } else {
             WdfRequestComplete(req, st);
         }
-    }
-
-    /* Put controller TX UART to sleep after 2 s idle */
-    if (Ctx->TxAwake && (GetTicksMs() - Ctx->LastTxActivityMs) > 2000) {
-        UCHAR sleepInd = HCI_IBS_SLEEP_IND;
-        (VOID)UartWriteSync(Ctx, &sleepInd, 1, 20);
-        Ctx->TxAwake = FALSE;
     }
 }
 
