@@ -21,7 +21,7 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
         UCHAR rx[64];
         ULONG n;
         LogPrint("wcn: waking chip before CMD (ChipUartAsleep=1)\n");
-        (VOID)UartWriteSync(Ctx, &wake, 1, 20);
+        (VOID)UartWriteSync(Ctx, &wake, 1, 50);
         SleepMs(10);
         while ((n = UartReadPoll(Ctx, rx, sizeof(rx))) > 0) {
             BthxFeedRxBytes(Ctx, rx, n);
@@ -38,7 +38,7 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
         UCHAR rx[64];
 
         if (Ctx->ChipUartAsleep || idleNeedWake) {
-            (VOID)UartWriteSync(Ctx, &wake, 1, 20);
+            (VOID)UartWriteSync(Ctx, &wake, 1, 50);
             SleepMs(5);
             {
                 ULONG n = UartReadPoll(Ctx, rx, sizeof(rx));
@@ -59,7 +59,7 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
                 st = UartWriteSync(Ctx, &wake, 1, 20);
                 if (!NT_SUCCESS(st)) {
                     UartSetFlowControl(Ctx, TRUE);
-                    (VOID)UartWriteSync(Ctx, &wake, 1, 20);
+                    (VOID)UartWriteSync(Ctx, &wake, 1, 50);
                     UartSetFlowControl(Ctx, FALSE);
                 }
                 lastTxMs = now;
@@ -110,7 +110,7 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
             UCHAR wake = HCI_IBS_WAKE_IND;
             LogPrint("wcn: CMD no EVT in 100ms; switching to 115200 baud fallback\n");
             (VOID)UartSetBaud(Ctx, 115200u);
-            (VOID)UartWriteSync(Ctx, &wake, 1, 20);
+            (VOID)UartWriteSync(Ctx, &wake, 1, 50);
             SleepMs(5);
             (VOID)UartWriteSync(Ctx, txBuf, 1 + Len, 500);
         }
@@ -394,16 +394,6 @@ VOID BthxProcessTxAndSleep(PXUN_BT_CONTEXT Ctx)
             WdfRequestCompleteWithInformation(req, STATUS_SUCCESS, sizeof(BTHX_HCI_PACKET_TYPE));
         } else {
             WdfRequestComplete(req, st);
-        }
-    }
-
-    /* Keep-alive while idle (< 200 ms) so WCN3950 does not gate off UART */
-    if (Ctx->FwReady && !Ctx->StopRequested && !Ctx->RadioDead && Ctx->LastTxActivityMs != 0) {
-        ULONGLONG now = GetTicksMs();
-        if ((now - Ctx->LastTxActivityMs) >= 100ULL && (now - Ctx->LastKeepAliveMs) >= 100ULL) {
-            UCHAR wake = HCI_IBS_WAKE_IND;
-            (VOID)UartWriteSync(Ctx, &wake, 1, 10);
-            Ctx->LastKeepAliveMs = now;
         }
     }
 }

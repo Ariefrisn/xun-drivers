@@ -346,6 +346,43 @@ VOID UartFlushRx(PXUN_BT_CONTEXT Ctx)
     } while (n > 0 && guard < 32);
 }
 
+static VOID UartClearTxEngine(PXUN_BT_CONTEXT Ctx)
+{
+    ULONG i;
+    ULONG st;
+    ULONG irq;
+
+    MmioWrite32(&Ctx->Se, SE_GENI_TX_WATERMARK_REG, 0);
+    st = MmioRead32(&Ctx->Se, SE_GENI_STATUS);
+    if (st & M_GENI_CMD_ACTIVE) {
+        MmioWrite32(&Ctx->Se, SE_GENI_M_CMD_CTRL_REG, M_GENI_CMD_CANCEL);
+        for (i = 0; i < 50; i++) {
+            irq = MmioRead32(&Ctx->Se, SE_GENI_M_IRQ_STATUS);
+            st = MmioRead32(&Ctx->Se, SE_GENI_STATUS);
+            if ((irq & M_CMD_CANCEL_EN) != 0 && (st & M_GENI_CMD_ACTIVE) == 0) {
+                break;
+            }
+            BusyWaitUs(100);
+        }
+        st = MmioRead32(&Ctx->Se, SE_GENI_STATUS);
+        irq = MmioRead32(&Ctx->Se, SE_GENI_M_IRQ_STATUS);
+        if ((irq & M_CMD_CANCEL_EN) == 0 || (st & M_GENI_CMD_ACTIVE) != 0) {
+            MmioWrite32(&Ctx->Se, SE_GENI_M_CMD_CTRL_REG, M_GENI_CMD_ABORT);
+            for (i = 0; i < 50; i++) {
+                irq = MmioRead32(&Ctx->Se, SE_GENI_M_IRQ_STATUS);
+                st = MmioRead32(&Ctx->Se, SE_GENI_STATUS);
+                if ((irq & M_CMD_ABORT_EN) != 0 && (st & M_GENI_CMD_ACTIVE) == 0) {
+                    break;
+                }
+                BusyWaitUs(100);
+            }
+        }
+    }
+    irq = MmioRead32(&Ctx->Se, SE_GENI_M_IRQ_STATUS);
+    MmioWrite32(&Ctx->Se, SE_GENI_M_IRQ_CLEAR,
+                irq | M_CMD_DONE_EN | M_CMD_FAILURE_EN | M_CMD_CANCEL_EN | M_CMD_ABORT_EN | M_TX_FIFO_WATERMARK_EN);
+}
+
 NTSTATUS UartWriteSync(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len, ULONG TimeoutMs)
 {
     ULONG offset = 0;
@@ -357,17 +394,15 @@ NTSTATUS UartWriteSync(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len, ULONG 
         return STATUS_SUCCESS;
     }
 
-    /* Wait until any previous M_CMD finishes */
-    startMs = GetTicksMs();
-    while (MmioRead32(&Ctx->Se, SE_GENI_STATUS) & M_GENI_CMD_ACTIVE) {
-        if ((GetTicksMs() - startMs) > TimeoutMs) {
+    if (MmioRead32(&Ctx->Se, SE_GENI_STATUS) & M_GENI_CMD_ACTIVE) {
+        UartClearTxEngine(Ctx);
+        if (MmioRead32(&Ctx->Se, SE_GENI_STATUS) & M_GENI_CMD_ACTIVE) {
             LogPrint("uart: TX busy timeout status=%08x\n", MmioRead32(&Ctx->Se, SE_GENI_STATUS));
-            MmioWrite32(&Ctx->Se, SE_GENI_M_CMD_CTRL_REG, M_GENI_CMD_CANCEL);
             return STATUS_IO_TIMEOUT;
         }
-        BusyWaitUs(20);
     }
 
+    MmioWrite32(&Ctx->Se, SE_GENI_TX_WATERMARK_REG, 0);
     MmioWrite32(&Ctx->Se, SE_GENI_M_IRQ_CLEAR, 0xFFFFFFFFu);
     MmioWrite32(&Ctx->Se, SE_UART_TX_TRANS_LEN, Len);
     MmioWrite32(&Ctx->Se, SE_GENI_M_CMD0, UART_START_TX);
@@ -381,7 +416,7 @@ NTSTATUS UartWriteSync(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len, ULONG 
                 LogPrint("uart: TX FIFO stall at %u/%u (ios=%08x m_irq=%08x)\n",
                          offset, Len, MmioRead32(&Ctx->Se, SE_GENI_IOS),
                          MmioRead32(&Ctx->Se, SE_GENI_M_IRQ_STATUS));
-                MmioWrite32(&Ctx->Se, SE_GENI_M_CMD_CTRL_REG, M_GENI_CMD_CANCEL);
+                UartClearTxEngine(Ctx);
                 return STATUS_IO_TIMEOUT;
             }
             BusyWaitUs(20);
@@ -412,7 +447,7 @@ NTSTATUS UartWriteSync(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len, ULONG 
             LogPrint("uart: TX M_CMD_DONE timeout (%uB, st=%08x m_irq=%08x ios=%08x)\n",
                      Len, MmioRead32(&Ctx->Se, SE_GENI_STATUS), irqSt,
                      MmioRead32(&Ctx->Se, SE_GENI_IOS));
-            MmioWrite32(&Ctx->Se, SE_GENI_M_CMD_CTRL_REG, M_GENI_CMD_CANCEL);
+            UartClearTxEngine(Ctx);
             return STATUS_IO_TIMEOUT;
         }
         BusyWaitUs(20);
