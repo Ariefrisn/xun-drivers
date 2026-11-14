@@ -152,8 +152,8 @@ static NTSTATUS GccProgramDirectRcg(PXUN_BT_CONTEXT Ctx, ULONG TargetRate)
         else if (TargetRate == 102400000u){ m = 128;  n = 375; }
         else { return STATUS_INVALID_PARAMETER; }
 
-        /* src=1 (300 MHz GPLL0_OUT_EVEN), pre_div=1, dual-edge MND mode (2 << 12) */
-        cfg = (1u << 0) | (1u << 8) | (2u << 12);
+        /* src=1 (300 MHz GPLL0_OUT_EVEN -> parent_map cfg=2), pre_div=1, dual-edge MND mode (2 << 12) */
+        cfg = (1u << 0) | (2u << 8) | (2u << 12);
         MmioWrite32(&Ctx->GccQupS3, rcgOff + RCG_CFG_OFF, cfg);
         MmioWrite32(&Ctx->GccQupS3, rcgOff + RCG_M_OFF, m);
         MmioWrite32(&Ctx->GccQupS3, rcgOff + RCG_N_OFF, (~(n - m)) & 0xFFFFu);
