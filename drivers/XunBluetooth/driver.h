@@ -7,7 +7,7 @@
 #include <BthXDDI.h>
 #include "hw.h"
 
-#define XUN_BT_VERSION   "v0.10"
+#define XUN_BT_VERSION   "v0.11"
 #define XUN_BT_POOL_TAG  'XBtU'
 
 typedef struct _MMIO_RANGE {
@@ -120,6 +120,12 @@ typedef struct _XUN_BT_CONTEXT {
     ULONG        TxPackets;
     ULONG        RxEvents;
     ULONG        RxAcls;
+
+    /* Diagnostics */
+    ULONG        LastRxIrqSt;
+    ULONGLONG    LastTxCmdMs;
+    BOOLEAN      AwaitingEvt;
+    BOOLEAN      DiagProbed;
 } XUN_BT_CONTEXT, *PXUN_BT_CONTEXT;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(XUN_BT_CONTEXT, GetBtContext);
@@ -138,9 +144,11 @@ VOID     UartSetFlowControl(PXUN_BT_CONTEXT Ctx, BOOLEAN DisableFlow);
 VOID     UartFlushRx(PXUN_BT_CONTEXT Ctx);
 NTSTATUS UartWriteSync(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len, ULONG TimeoutMs);
 ULONG    UartReadPoll(PXUN_BT_CONTEXT Ctx, UCHAR *OutBuf, ULONG MaxLen);
+VOID     UartLogHwState(PXUN_BT_CONTEXT Ctx, PCSTR Tag);
 
 /* wcn3990.c */
 NTSTATUS WcnInitializeRadio(PXUN_BT_CONTEXT Ctx);
+VOID     WcnProbeDeadRadio(PXUN_BT_CONTEXT Ctx);
 
 /* bthx.c */
 NTSTATUS BthxQueuesCreate(PXUN_BT_CONTEXT Ctx);

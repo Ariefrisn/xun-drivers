@@ -431,6 +431,7 @@ ULONG UartReadPoll(PXUN_BT_CONTEXT Ctx, UCHAR *OutBuf, ULONG MaxLen)
 
     irqSt = MmioRead32(&Ctx->Se, SE_GENI_S_IRQ_STATUS);
     if (irqSt != 0) {
+        Ctx->LastRxIrqSt = irqSt;
         MmioWrite32(&Ctx->Se, SE_GENI_S_IRQ_CLEAR, irqSt);
     }
 
@@ -465,6 +466,19 @@ ULONG UartReadPoll(PXUN_BT_CONTEXT Ctx, UCHAR *OutBuf, ULONG MaxLen)
         GeniStartRx(Ctx);
     }
     return readBytes;
+}
+
+VOID UartLogHwState(PXUN_BT_CONTEXT Ctx, PCSTR Tag)
+{
+    ULONG cbcrOff = GCC_QUP0_S3_CBCR & 0xFFFu;
+    LogPrint("hw[%s]: ios=%08x st=%08x s_irq=%08x rx_fifo=%08x sw_ctrl=%u cbcr=%08x\n",
+             Tag,
+             MmioRead32(&Ctx->Se, SE_GENI_IOS),
+             MmioRead32(&Ctx->Se, SE_GENI_STATUS),
+             Ctx->LastRxIrqSt,
+             MmioRead32(&Ctx->Se, SE_GENI_RX_FIFO_STATUS),
+             MmioRead32(&Ctx->TlmmSwCtrl, TLMM_IO) & 1u,
+             MmioRead32(&Ctx->GccQupS3, cbcrOff));
 }
 
 NTSTATUS UartHwInit(PXUN_BT_CONTEXT Ctx)

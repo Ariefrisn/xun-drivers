@@ -24,6 +24,10 @@ static NTSTATUS SendH4Frame(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UCHAR *Pay
     st = UartWriteSync(Ctx, txBuf, 1 + Len, 500);
     ExFreePoolWithTag(txBuf, XUN_BT_POOL_TAG);
     Ctx->LastTxActivityMs = GetTicksMs();
+    if (PktType == HCI_PKT_CMD) {
+        Ctx->LastTxCmdMs = Ctx->LastTxActivityMs;
+        Ctx->AwaitingEvt = TRUE;
+    }
     Ctx->TxPackets++;
     if (Ctx->TxPackets <= 128) {
         LogHexDump((PktType == HCI_PKT_CMD) ? "hci -> CMD" : "hci -> ACL", Payload, Len);
@@ -95,6 +99,7 @@ static VOID DispatchCompletedPacket(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UC
     PBT_RX_PACKET pkt;
 
     if (PktType == HCI_PKT_EVENT) {
+        Ctx->AwaitingEvt = FALSE;
         Ctx->RxEvents++;
         if (Ctx->RxEvents <= 128) {
             LogHexDump("hci <- EVT", Data, Len);
@@ -181,9 +186,11 @@ VOID BthxFeedRxBytes(PXUN_BT_CONTEXT Ctx, const UCHAR *Data, ULONG Len)
                 p->Pos = 0;
                 p->Stage = H4_STAGE_HDR;
             } else {
-                LogPrint("h4: unexpected type byte %02x (ios=%08x sw_ctrl=%u)\n",
+                LogPrint("h4: unexpected type byte %02x (ios=%08x st=%08x s_irq=%08x sw_ctrl=%u)\n",
                          ch,
                          MmioRead32(&Ctx->Se, SE_GENI_IOS),
+                         MmioRead32(&Ctx->Se, SE_GENI_STATUS),
+                         Ctx->LastRxIrqSt,
                          MmioRead32(&Ctx->TlmmSwCtrl, TLMM_IO) & 1u);
             }
         } else if (p->Stage == H4_STAGE_HDR) {

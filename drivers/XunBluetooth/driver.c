@@ -57,6 +57,11 @@ static VOID BtWorkerThread(PVOID Context)
             break;
         }
 
+        if (ctx->AwaitingEvt && !ctx->DiagProbed && (GetTicksMs() - ctx->LastTxCmdMs) > 5000ULL) {
+            ctx->DiagProbed = TRUE;
+            WcnProbeDeadRadio(ctx);
+        }
+
         if (totalRead == 0) {
             LARGE_INTEGER timeout;
             timeout.QuadPart = -10000LL; /* 1 ms poll tick */

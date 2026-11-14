@@ -609,8 +609,16 @@ NTSTATUS WcnInitializeRadio(PXUN_BT_CONTEXT Ctx)
 
     if (Ctx->IsWcn3950) {
         static const UCHAR disLog[6] = { HCI_PKT_CMD, 0x17, 0xFC, 0x02, EDL_DISABLE_LOG_SUB_OP, 0x00 };
+        UCHAR rsp[32];
+        ULONG rlen = 0;
         (VOID)UartWriteSync(Ctx, disLog, sizeof(disLog), 200);
         SleepMs(20);
+        rlen = UartReadPoll(Ctx, rsp, sizeof(rsp));
+        if (rlen > 0) {
+            LogHexDump("wcn: disLog rsp", rsp, rlen);
+        } else {
+            LogPrint("wcn: disLog no rsp\n");
+        }
         UartFlushRx(Ctx);
     }
 
@@ -621,4 +629,23 @@ NTSTATUS WcnInitializeRadio(PXUN_BT_CONTEXT Ctx)
     Ctx->TxAwake = TRUE;
     Ctx->LastTxActivityMs = GetTicksMs();
     return STATUS_SUCCESS;
+}
+
+VOID WcnProbeDeadRadio(PXUN_BT_CONTEXT Ctx)
+{
+    ULONG savedBaud = Ctx->CurrentBaud;
+    NTSTATUS st;
+
+    UartLogHwState(Ctx, "dead-probe");
+    st = ReadSocVersion(Ctx);
+    LogPrint("probe: ReadSocVersion@%u -> %08x\n", savedBaud, st);
+    if (!NT_SUCCESS(st) && savedBaud != 115200) {
+        if (NT_SUCCESS(UartSetBaud(Ctx, 115200))) {
+            UartSetFlowControl(Ctx, TRUE);
+            st = ReadSocVersion(Ctx);
+            LogPrint("probe: ReadSocVersion@115200 -> %08x\n", st);
+            (VOID)UartSetBaud(Ctx, savedBaud);
+            UartSetFlowControl(Ctx, FALSE);
+        }
+    }
 }
