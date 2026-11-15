@@ -245,11 +245,8 @@ static NTSTATUS ReadSocVersion(PXUN_BT_CONTEXT Ctx)
 
 static NTSTATUS SwitchOperBaud(PXUN_BT_CONTEXT Ctx)
 {
-    /* Prefer 3.2 Mbps (exact from 102.4 MHz DFSR), fallback 3.0 Mbps / 921600 */
+    /* Test 115200 baseline (no baud switch) to isolate 350ms post-reset chip reset */
     static const struct { ULONG Baud; UCHAR QcaCode; } kCandidates[] = {
-        { 3200000u, QCA_BAUDRATE_3200000 },
-        { 3000000u, QCA_BAUDRATE_3000000 },
-        { 921600u,  QCA_BAUDRATE_921600  },
         { 115200u,  QCA_BAUDRATE_115200  },
     };
     ULONG i;
