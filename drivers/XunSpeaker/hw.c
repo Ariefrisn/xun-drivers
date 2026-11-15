@@ -204,6 +204,11 @@ static NTSTATUS CodecBringUp(VOID)
     for (i = 0; i < ARRAYSIZE(g_RxStock); i++) {
         TaWr(RX_MACRO + g_RxStock[i][0], g_RxStock[i][1]);
     }
+    TaWr(RX_MACRO + 0x100, 0x03);                    /* keep MCLK_CONTROL enabled (g_RxStock had 0x00) */
+    TaWr(RX_MACRO + 0x104, 0x01);                    /* FS_CNT_CONTROL enabled */
+    TaWr(RX_MACRO + 0x108, 0x01);                    /* SWR_CONTROL enabled */
+    TaWr(RX_MACRO + 0x074, 0x22);                    /* RX2 MUX + RX3 MUX = AIF2_PB */
+    TaWr(RX_MACRO + 0x200, 0x01);                    /* CLSH enable (rx_macro_config_classh) */
     TaWr(RX_MACRO + 0x404, 0x08);                    /* RX INT0 DEM MUX = CLSH_DSM_OUT (EAR path) */
     TaWr(RX_MACRO + 0x400, 4); TaWr(RX_MACRO + 0x480, 4); TaWr(RX_MACRO + 0x500, 4);
     /* 9. WCD937x init + RX clocks + AUX DAC (Left) + EAR DAC (Right) (TX slave on VA bus, dev 1) */
@@ -280,6 +285,7 @@ static VOID PortsAndPa(VOID)
     SwrWr(VA_SWR, 1, 0x300A, 0x40);                 /* Keep bit 7 (0x80) clear while active (pulsed only on POST_PMD) */
     TaSleep(6);                                     /* ear_pa POST_PMU 6ms settle */
     SwrWr(VA_SWR, 1, 0x300B, 0x12);                 /* WCD937X_ANA_EAR: POST_PMU clears bit 7 (stock 0x12) */
+    SwrWr(VA_SWR, 1, 0x3467, 0x00);                 /* POST_PMU clears 0x3467 bits 0,2 (stock ear_pa/aux_pa) */
     SwrWr(VA_SWR, 1, 0x346B, 0x4C);
     SwrWr(VA_SWR, 1, 0x346C, 0x7F);
     SwrWr(VA_SWR, 1, 0x346D, 0x0F);
@@ -637,8 +643,9 @@ NTSTATUS HwStreamRun(WDFDEVICE Device)
                  TaRd(RX_MACRO + 0x080), TaRd(RX_MACRO + 0x084),
                  TaRd(RX_MACRO + 0x180), TaRd(RX_MACRO + 0x184),
                  TaRd(RX_MACRO + 0x190), TaRd(RX_MACRO + 0x194));
-        LogPrint("rx_macro cfg: 204=%02x 220=%02x 234=%02x 404=%02x 418=%02x 484=%02x 498=%02x 504=%02x 518=%02x swr=%08x/%08x\r\n",
-                 TaRd(RX_MACRO + 0x204), TaRd(RX_MACRO + 0x220), TaRd(RX_MACRO + 0x234),
+        LogPrint("rx_macro cfg: 100=%02x 104=%02x 108=%02x 200=%02x 204=%02x 220=%02x 234=%02x 404=%02x 418=%02x 484=%02x 498=%02x 504=%02x 518=%02x swr=%08x/%08x\r\n",
+                 TaRd(RX_MACRO + 0x100), TaRd(RX_MACRO + 0x104), TaRd(RX_MACRO + 0x108),
+                 TaRd(RX_MACRO + 0x200), TaRd(RX_MACRO + 0x204), TaRd(RX_MACRO + 0x220), TaRd(RX_MACRO + 0x234),
                  TaRd(RX_MACRO + 0x404), TaRd(RX_MACRO + 0x418),
                  TaRd(RX_MACRO + 0x484), TaRd(RX_MACRO + 0x498),
                  TaRd(RX_MACRO + 0x504), TaRd(RX_MACRO + 0x518),
