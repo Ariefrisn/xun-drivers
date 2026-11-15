@@ -50,6 +50,24 @@ static VOID SwrWr(ULONGLONG Master, ULONG Dev, ULONG Reg, ULONG Val)
     TaSleep(1);
 }
 
+static LONG SwrRd(ULONGLONG Master, ULONG Dev, ULONG Reg)
+{
+    ULONG i, v, id;
+
+    g_SwrId = (g_SwrId % 14) + 1;
+    id = g_SwrId;
+    TaWr(Master + 0x304, (Dev << 20) | (id << 16) | Reg);
+    for (i = 0; i < 20; i++) {
+        TaSleep(1);
+        v = TaRd(Master + 0x318);
+        if (((v >> 8) & 0xFu) == id) {
+            return (LONG)(v & 0xFFu);
+        }
+    }
+    TaWr(Master + 0x308, 1);
+    return -1;
+}
+
 static NTSTATUS Prm(const ULONG *Dw, ULONG N)
 {
     ULONG op = 0, r[4] = { 0 };
@@ -266,6 +284,22 @@ static VOID PortsAndPa(VOID)
     SwrWr(VA_SWR, 1, 0x346C, 0x7F);
     SwrWr(VA_SWR, 1, 0x346D, 0x0F);
     LogPrint("ports: rx frame b1 %08x, irq %08x\r\n", TaRd(RX_SWR + 0x105C), TaRd(RX_SWR + 0x200));
+    LogPrint("wcd[3008..300B,30A4,3128,3133]: %02x %02x %02x %02x %02x %02x %02x\r\n",
+             SwrRd(VA_SWR, 1, 0x3008), SwrRd(VA_SWR, 1, 0x3009),
+             SwrRd(VA_SWR, 1, 0x300A), SwrRd(VA_SWR, 1, 0x300B),
+             SwrRd(VA_SWR, 1, 0x30A4), SwrRd(VA_SWR, 1, 0x3128), SwrRd(VA_SWR, 1, 0x3133));
+    LogPrint("wcd[3408,3409,340B,344E..3450,3467,346B..346D]: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\r\n",
+             SwrRd(VA_SWR, 1, 0x3408), SwrRd(VA_SWR, 1, 0x3409), SwrRd(VA_SWR, 1, 0x340B),
+             SwrRd(VA_SWR, 1, 0x344E), SwrRd(VA_SWR, 1, 0x344F), SwrRd(VA_SWR, 1, 0x3450),
+             SwrRd(VA_SWR, 1, 0x3467), SwrRd(VA_SWR, 1, 0x346B), SwrRd(VA_SWR, 1, 0x346C), SwrRd(VA_SWR, 1, 0x346D));
+    LogPrint("rx_slv p1[103,130..134]=%02x/%02x,%02x,%02x,%02x p2[203,230..236]=%02x/%02x,%02x,%02x,%02x,%02x p4[403,430..434]=%02x/%02x,%02x,%02x,%02x\r\n",
+             SwrRd(RX_SWR, 1, 0x103), SwrRd(RX_SWR, 1, 0x130), SwrRd(RX_SWR, 1, 0x132), SwrRd(RX_SWR, 1, 0x133), SwrRd(RX_SWR, 1, 0x134),
+             SwrRd(RX_SWR, 1, 0x203), SwrRd(RX_SWR, 1, 0x230), SwrRd(RX_SWR, 1, 0x232), SwrRd(RX_SWR, 1, 0x233), SwrRd(RX_SWR, 1, 0x234), SwrRd(RX_SWR, 1, 0x236),
+             SwrRd(RX_SWR, 1, 0x403), SwrRd(RX_SWR, 1, 0x430), SwrRd(RX_SWR, 1, 0x432), SwrRd(RX_SWR, 1, 0x433), SwrRd(RX_SWR, 1, 0x434));
+    LogPrint("rx_mst p1=%08x/%02x p2=%08x/%02x p4=%08x/%02x\r\n",
+             TaRd(RX_SWR + 0x1164), TaRd(RX_SWR + 0x112C),
+             TaRd(RX_SWR + 0x1264), TaRd(RX_SWR + 0x122C),
+             TaRd(RX_SWR + 0x1464), TaRd(RX_SWR + 0x142C));
 }
 
 static const UCHAR g_FsAddrs[4] = { 0x34, 0x35, 0x80 | 0x34, 0x80 | 0x35 };
@@ -597,6 +631,18 @@ NTSTATUS HwStreamRun(WDFDEVICE Device)
         LogPrint("rx_macro ctl: 400=%02x 480=%02x 500=%02x vol=%02x/%02x/%02x\r\n",
                  TaRd(RX_MACRO + 0x400), TaRd(RX_MACRO + 0x480), TaRd(RX_MACRO + 0x500),
                  TaRd(RX_MACRO + 0x414), TaRd(RX_MACRO + 0x494), TaRd(RX_MACRO + 0x514));
+        LogPrint("rx_macro mux: 040=%02x 044=%02x 070=%02x 074=%02x 080=%02x 084=%02x 180=%02x 184=%02x 190=%02x 194=%02x\r\n",
+                 TaRd(RX_MACRO + 0x040), TaRd(RX_MACRO + 0x044),
+                 TaRd(RX_MACRO + 0x070), TaRd(RX_MACRO + 0x074),
+                 TaRd(RX_MACRO + 0x080), TaRd(RX_MACRO + 0x084),
+                 TaRd(RX_MACRO + 0x180), TaRd(RX_MACRO + 0x184),
+                 TaRd(RX_MACRO + 0x190), TaRd(RX_MACRO + 0x194));
+        LogPrint("rx_macro cfg: 204=%02x 220=%02x 234=%02x 404=%02x 418=%02x 484=%02x 498=%02x 504=%02x 518=%02x swr=%08x/%08x\r\n",
+                 TaRd(RX_MACRO + 0x204), TaRd(RX_MACRO + 0x220), TaRd(RX_MACRO + 0x234),
+                 TaRd(RX_MACRO + 0x404), TaRd(RX_MACRO + 0x418),
+                 TaRd(RX_MACRO + 0x484), TaRd(RX_MACRO + 0x498),
+                 TaRd(RX_MACRO + 0x504), TaRd(RX_MACRO + 0x518),
+                 TaRd(RX_SWR + 0x105C), TaRd(RX_SWR + 0x200));
         if (g_FsMask != 0) {
             Fs1815DumpRegs("hw run");
         }
