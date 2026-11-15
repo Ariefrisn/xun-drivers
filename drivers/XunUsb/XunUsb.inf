@@ -1,0 +1,58 @@
+;
+; XunUsb.inf - USB3/DWC3 Host Mode bring-up & xHCI PDO for Redmi Pad SE (xun, SM6225)
+; Root-enumerated KMDF bus driver: initializes HS PHY + DWC3 host mode + SMMU SID 0x120
+; and enumerates ACPI\PNP0D10 (PCI\CC_0C0330) for Windows USBXHCI.SYS.
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+CatalogFile = XunUsb.cat
+DriverVer   = ; set by stampinf
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+XunUsb.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%DeviceDesc% = XunUsb_Device, Root\XunUsb
+
+[XunUsb_Device.NT]
+CopyFiles = XunUsb_CopyFiles
+
+[XunUsb_CopyFiles]
+XunUsb.sys
+
+[XunUsb_Device.NT.Services]
+AddService = XunUsb, 0x00000002, XunUsb_Service
+
+[XunUsb_Service]
+DisplayName    = %ServiceDesc%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %13%\XunUsb.sys
+
+[XunUsb_Device.NT.Wdf]
+KmdfService = XunUsb, XunUsb_WdfSection
+
+[XunUsb_WdfSection]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+ProviderName     = "xun-woa"
+ManufacturerName = "xun-woa"
+DiskName         = "XunUsb Installation Disk"
+DeviceDesc       = "Xun USB Host Controller Bring-Up (DWC3/xHCI)"
+ServiceDesc      = "XunUsb Service"
