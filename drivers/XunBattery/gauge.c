@@ -101,16 +101,27 @@ static const PCSTR g_TcNames[] = { "fallback", "toggling", "source(hub)", "sink(
 
 static NTSTATUS ChgSetOtg(PDEVICE_CONTEXT Ctx, BOOLEAN On, PCSTR Why)
 {
-    UCHAR r03 = 0, want;
+    UCHAR r00 = 0, r03 = 0, r0b = 0, r0c = 0, r11 = 0, want;
     NTSTATUS s = I2cReadByte(&Ctx->Bus, CHG_ADDR, CHG_REG03, &r03);
 
     if (!NT_SUCCESS(s)) {
         return s;
     }
-    want = On ? (UCHAR)(r03 | CHG_OTG_CONFIG) : (UCHAR)(r03 & ~CHG_OTG_CONFIG);
+    if (On && NT_SUCCESS(I2cReadByte(&Ctx->Bus, CHG_ADDR, 0x00, &r00)) && (r00 & 0x80)) {
+        (VOID)I2cWriteByte(&Ctx->Bus, CHG_ADDR, 0x00, (UCHAR)(r00 & ~0x80));
+        LogPrint("otg: cleared HIZ reg00 %02x -> %02x\n", r00, (UCHAR)(r00 & ~0x80));
+    }
+    want = On ? (UCHAR)((r03 & ~0x10) | CHG_OTG_CONFIG)
+              : (UCHAR)((r03 & ~CHG_OTG_CONFIG) | 0x10);
     if (want != r03) {
         s = I2cWriteByte(&Ctx->Bus, CHG_ADDR, CHG_REG03, want);
-        LogPrint("otg %s (%s): reg03 %02x -> %02x (%08x)\n", On ? "on" : "off", Why, r03, want, s);
+        KeStallExecutionProcessor(20000);
+        (VOID)I2cReadByte(&Ctx->Bus, CHG_ADDR, CHG_REG03, &r03);
+        (VOID)I2cReadByte(&Ctx->Bus, CHG_ADDR, CHG_REG0B, &r0b);
+        (VOID)I2cReadByte(&Ctx->Bus, CHG_ADDR, 0x0C, &r0c);
+        (VOID)I2cReadByte(&Ctx->Bus, CHG_ADDR, 0x11, &r11);
+        LogPrint("otg %s (%s): want=%02x s=%08x -> r03=%02x r0b=%02x r0c=%02x r11=%02x\n",
+                 On ? "on" : "off", Why, want, s, r03, r0b, r0c, r11);
     }
     return s;
 }

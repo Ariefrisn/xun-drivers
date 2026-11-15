@@ -198,6 +198,19 @@ static NTSTATUS EvtPrepareHw(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST ResourcesR
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS EvtD0Entry(_In_ WDFDEVICE Device, _In_ WDF_POWER_DEVICE_STATE PreviousState)
+{
+    PUSB_CTX ctx = GetUsbCtx(Device);
+
+    UNREFERENCED_PARAMETER(PreviousState);
+    if (ctx->Dwc3) {
+        LogPrint("d0: gctl=%08x usbcmd=%08x usbsts=%08x portsc=%08x\r\n",
+                 Rd32(ctx->Dwc3, DWC3_GCTL), Rd32(ctx->Dwc3, 0x20),
+                 Rd32(ctx->Dwc3, 0x24), Rd32(ctx->Dwc3, 0x420));
+    }
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS EvtReleaseHw(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST ResourcesTranslated)
 {
     PUSB_CTX ctx = GetUsbCtx(Device);
@@ -223,6 +236,7 @@ static NTSTATUS EvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT Devi
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
     pnp.EvtDevicePrepareHardware = EvtPrepareHw;
     pnp.EvtDeviceReleaseHardware = EvtReleaseHw;
+    pnp.EvtDeviceD0Entry = EvtD0Entry;
     WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnp);
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attr, USB_CTX);
