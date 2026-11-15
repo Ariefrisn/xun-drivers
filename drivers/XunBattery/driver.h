@@ -140,6 +140,8 @@ typedef struct _DEVICE_CONTEXT {
     ULONG         JeitaZone;
     BOOLEAN       TcpcOk;
     BOOLEAN       TcpcIsRt1711h;
+    BOOLEAN       WusbOk;
+    UCHAR         WusbLastStat;
     ULONG         TcState;
     ULONG         TcCandidate;
     ULONG         TcDetachSteps;

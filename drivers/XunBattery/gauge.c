@@ -23,16 +23,57 @@ static VOID TcpcDump(PDEVICE_CONTEXT Ctx, PCSTR Why)
              Why, alert, amask, tc, role, pc, cc, pwr, flt);
 }
 
+#define WUSB3801_ADDR     0x60
+#define WUSB3801_REG_ID   0x01
+#define WUSB3801_REG_CTRL 0x02
+#define WUSB3801_REG_INT  0x03
+#define WUSB3801_REG_STAT 0x04
+
+static VOID WusbStep(PDEVICE_CONTEXT Ctx)
+{
+    UCHAR r03 = 0, r04 = 0;
+    ULONG partner;
+
+    (VOID)I2cReadByte(&Ctx->Bus, WUSB3801_ADDR, WUSB3801_REG_INT, &r03);
+    if (!NT_SUCCESS(I2cReadByte(&Ctx->Bus, WUSB3801_ADDR, WUSB3801_REG_STAT, &r04))) {
+        return;
+    }
+    partner = (r04 >> 2) & 0x07;
+    if (r04 != Ctx->WusbLastStat || r03 != 0) {
+        LogPrint("wusb3801: int=%02x stat=%02x (vbus=%u partner=%u cc=%u)\n",
+                 r03, r04, (r04 >> 7) & 1, partner, r04 & 0x03);
+        Ctx->WusbLastStat = r04;
+    }
+    if (partner == 1) {
+        if (Ctx->TcState != TC_SRC) {
+            ChgSetOtg(Ctx, TRUE, "wusb3801 hub attached");
+            TcSetState(Ctx, TC_SRC, "wusb3801 partner Snk/Rd");
+        }
+    } else if (partner == 2) {
+        if (Ctx->TcState != TC_SNK) {
+            ChgSetOtg(Ctx, FALSE, "wusb3801 charger attached");
+            TcSetState(Ctx, TC_SNK, "wusb3801 partner Src/Rp");
+        }
+    } else {
+        if (Ctx->TcState != TC_TOGGLING) {
+            ChgSetOtg(Ctx, FALSE, "wusb3801 detached");
+            TcSetState(Ctx, TC_TOGGLING, "wusb3801 detached");
+        }
+    }
+}
+
 static VOID TcpcInit(PDEVICE_CONTEXT Ctx)
 {
     USHORT vid = 0, pid = 0;
-    UCHAR role = 0;
+    UCHAR role = 0, wid = 0, wstat = 0, wint = 0;
     NTSTATUS t, w = STATUS_SUCCESS;
 
     ULONG tries;
 
     Ctx->TcpcOk = FALSE;
     Ctx->TcpcIsRt1711h = FALSE;
+    Ctx->WusbOk = FALSE;
+    Ctx->WusbLastStat = 0xFF;
     t = I2cReadWord(&Ctx->Bus, TCPC_ADDR, TCPC_REG_VID, &vid);
     if (!NT_SUCCESS(t)) {
         for (tries = 0; tries < 3 && !NT_SUCCESS(t); tries++) {
@@ -45,7 +86,16 @@ static VOID TcpcInit(PDEVICE_CONTEXT Ctx)
     I2cReadWord(&Ctx->Bus, TCPC_ADDR, TCPC_REG_PID, &pid);
     LogPrint("tcpc: vid=%04x pid=%04x (%08x)\n", vid, pid, t);
     if (!NT_SUCCESS(t) || (vid != 0x311C && vid != 0x29CF)) {
-        LogPrint("tcpc: not found -> cc detect OFF\n");
+        t = I2cReadByte(&Ctx->Bus, WUSB3801_ADDR, WUSB3801_REG_ID, &wid);
+        if (NT_SUCCESS(t)) {
+            (VOID)I2cWriteByte(&Ctx->Bus, WUSB3801_ADDR, WUSB3801_REG_CTRL, 0x24);
+            (VOID)I2cReadByte(&Ctx->Bus, WUSB3801_ADDR, WUSB3801_REG_INT, &wint);
+            (VOID)I2cReadByte(&Ctx->Bus, WUSB3801_ADDR, WUSB3801_REG_STAT, &wstat);
+            Ctx->WusbOk = TRUE;
+            LogPrint("wusb3801@60: id=%02x int=%02x stat=%02x -> CC detect ON\n", wid, wint, wstat);
+        } else {
+            LogPrint("tcpc: not found, wusb3801@60 (%08x) -> cc detect OFF\n", t);
+        }
         return;
     }
 
@@ -140,6 +190,10 @@ static VOID TcStep(PDEVICE_CONTEXT Ctx)
     ULONG c1, c2, vbus;
 
     if (Ctx->TcState == TC_FALLBACK) {
+        return;
+    }
+    if (Ctx->WusbOk) {
+        WusbStep(Ctx);
         return;
     }
     if (!TcReadCc(Ctx, &cc) || !NT_SUCCESS(I2cReadByte(&Ctx->Bus, CHG_ADDR, CHG_REG0B, &r0b))) {
@@ -269,7 +323,7 @@ NTSTATUS BattHwInit(PDEVICE_CONTEXT Ctx)
     TcpcInit(Ctx);
     Ctx->TcLastCc = 0xFF;
     Ctx->TcState = TC_FALLBACK;
-    if (Ctx->TcpcOk) {
+    if (Ctx->TcpcOk || Ctx->WusbOk) {
         Ctx->TcState = TC_TOGGLING;
     } else {
         TcFallback(Ctx, "tcpc not usable");
