@@ -176,7 +176,7 @@ static VOID InitHsPhyAndDwc3Host(PUSB_CTX Ctx)
              Rd32(Ctx->Dwc3, 0x20), Rd32(Ctx->Dwc3, 0x24), Rd32(Ctx->Dwc3, 0x420));
 }
 
-static NTSTATUS BuildXhciResList(_In_ WDFCMRESLIST List, _In_ BOOLEAN Translated)
+static NTSTATUS BuildXhciResList(_In_ WDFCMRESLIST List)
 {
     CM_PARTIAL_RESOURCE_DESCRIPTOR desc;
     NTSTATUS status;
@@ -196,22 +196,16 @@ static NTSTATUS BuildXhciResList(_In_ WDFCMRESLIST List, _In_ BOOLEAN Translated
     desc.Type = CmResourceTypeInterrupt;
     desc.ShareDisposition = CmResourceShareShared;
     desc.Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-    desc.u.Interrupt.Level = Translated ? PASSIVE_LEVEL : 0;
+    desc.u.Interrupt.Level = 0;
     desc.u.Interrupt.Vector = USB_GSIV;
     desc.u.Interrupt.Affinity = (KAFFINITY)-1;
     return WdfCmResourceListAppendDescriptor(List, &desc);
 }
 
-static NTSTATUS EvtPdoResources(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST ResourcesRaw, _In_ WDFCMRESLIST ResourcesTranslated)
+static NTSTATUS EvtPdoResources(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Resources)
 {
-    NTSTATUS status;
-
     UNREFERENCED_PARAMETER(Device);
-    status = BuildXhciResList(ResourcesRaw, FALSE);
-    if (NT_SUCCESS(status)) {
-        status = BuildXhciResList(ResourcesTranslated, TRUE);
-    }
-    return status;
+    return BuildXhciResList(Resources);
 }
 
 static NTSTATUS EvtPdoRequirements(_In_ WDFDEVICE Device, _In_ WDFIORESREQLIST IoResourceRequirementsList)
@@ -376,3 +370,4 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
     cfg.EvtDriverUnload = EvtUnload;
     return WdfDriverCreate(DriverObject, RegistryPath, WDF_NO_OBJECT_ATTRIBUTES, &cfg, WDF_NO_HANDLE);
 }
+
