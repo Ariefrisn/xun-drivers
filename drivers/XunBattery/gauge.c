@@ -29,9 +29,19 @@ static VOID TcpcInit(PDEVICE_CONTEXT Ctx)
     UCHAR role = 0;
     NTSTATUS t, w = STATUS_SUCCESS;
 
+    ULONG tries;
+
     Ctx->TcpcOk = FALSE;
     Ctx->TcpcIsRt1711h = FALSE;
     t = I2cReadWord(&Ctx->Bus, TCPC_ADDR, TCPC_REG_VID, &vid);
+    if (!NT_SUCCESS(t)) {
+        for (tries = 0; tries < 3 && !NT_SUCCESS(t); tries++) {
+            (VOID)I2cWriteByte(&Ctx->Bus, TCPC_ADDR, TCPC_REG_COMMAND, TCPC_CMD_WAKE_I2C);
+            KeStallExecutionProcessor(5000);
+            t = I2cReadWord(&Ctx->Bus, TCPC_ADDR, TCPC_REG_VID, &vid);
+        }
+        LogPrint("tcpc: wake retry=%u -> vid=%04x (%08x)\n", tries, vid, t);
+    }
     I2cReadWord(&Ctx->Bus, TCPC_ADDR, TCPC_REG_PID, &pid);
     LogPrint("tcpc: vid=%04x pid=%04x (%08x)\n", vid, pid, t);
     if (!NT_SUCCESS(t) || (vid != 0x311C && vid != 0x29CF)) {
