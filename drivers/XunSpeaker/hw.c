@@ -306,6 +306,13 @@ static VOID PortsAndPa(VOID)
              TaRd(RX_SWR + 0x1164), TaRd(RX_SWR + 0x112C),
              TaRd(RX_SWR + 0x1264), TaRd(RX_SWR + 0x122C),
              TaRd(RX_SWR + 0x1464), TaRd(RX_SWR + 0x142C));
+    LogPrint("rx_b0 frame=%08x slv=%08x scp50=%02x en0=%02x/%02x/%02x wcd[3001,30A5,3465]=%02x/%02x/%02x\r\n",
+             TaRd(RX_SWR + 0x101C), TaRd(RX_SWR + 0x1090), SwrRd(RX_SWR, 1, 0x0050),
+             SwrRd(RX_SWR, 1, 0x120), SwrRd(RX_SWR, 1, 0x220), SwrRd(RX_SWR, 1, 0x420),
+             SwrRd(VA_SWR, 1, 0x3001), SwrRd(VA_SWR, 1, 0x30A5), SwrRd(VA_SWR, 1, 0x3465));
+    LogPrint("gpio106=%08x/%08x gpio70=%08x/%08x\r\n",
+             TaRd(0x0096A000ULL), TaRd(0x0096A004ULL),
+             TaRd(0x00546000ULL), TaRd(0x00546004ULL));
 }
 
 static const UCHAR g_FsAddrs[4] = { 0x34, 0x35, 0x80 | 0x34, 0x80 | 0x35 };
@@ -323,6 +330,7 @@ static VOID Fs1815DumpRegs(PCSTR Stage)
         USHORT r0 = 0xFFFF, r1 = 0xFFFF, r2 = 0xFFFF, r6 = 0xFFFF;
         USHORT r10 = 0xFFFF, r11 = 0xFFFF, r14 = 0xFFFF, r16 = 0xFFFF;
         USHORT r18 = 0xFFFF, r19 = 0xFFFF, r20 = 0xFFFF, rbc = 0xFFFF;
+        USHORT r4 = 0xFFFF, r5 = 0xFFFF, re = 0xFFFF, r4c = 0xFFFF;
 
         if (!(g_FsMask & (1u << k))) {
             continue;
@@ -330,7 +338,10 @@ static VOID Fs1815DumpRegs(PCSTR Stage)
         (VOID)TaI2cRead16(g_FsAddrs[k], 0x00, &r0);
         (VOID)TaI2cRead16(g_FsAddrs[k], 0x01, &r1);
         (VOID)TaI2cRead16(g_FsAddrs[k], 0x02, &r2);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x04, &r4);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x05, &r5);
         (VOID)TaI2cRead16(g_FsAddrs[k], 0x06, &r6);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x0E, &re);
         (VOID)TaI2cRead16(g_FsAddrs[k], 0x10, &r10);
         (VOID)TaI2cRead16(g_FsAddrs[k], 0x11, &r11);
         (VOID)TaI2cRead16(g_FsAddrs[k], 0x14, &r14);
@@ -338,9 +349,10 @@ static VOID Fs1815DumpRegs(PCSTR Stage)
         (VOID)TaI2cRead16(g_FsAddrs[k], 0x18, &r18);
         (VOID)TaI2cRead16(g_FsAddrs[k], 0x19, &r19);
         (VOID)TaI2cRead16(g_FsAddrs[k], 0x20, &r20);
+        (VOID)TaI2cRead16(g_FsAddrs[k], 0x4C, &r4c);
         (VOID)TaI2cRead16(g_FsAddrs[k], 0xBC, &rbc);
-        LogPrint("  fs1815[%s] %02x: st=%04x id=%04x/%04x pwr=%04x sys=%04x fmt=%04x ch=%04x vol=%04x/%04x r18=%04x r20=%04x bc=%04x\r\n",
-                 Stage, g_FsAddrs[k], r0, r1, r2, r10, r11, r14, r19, r6, r16, r18, r20, rbc);
+        LogPrint("  fs1815[%s] %02x: st=%04x id=%04x/%04x pwr=%04x sys=%04x fmt=%04x ch=%04x vol=%04x/%04x r18=%04x r20=%04x bc=%04x ex=%04x/%04x/%04x/%04x\r\n",
+                 Stage, g_FsAddrs[k], r0, r1, r2, r10, r11, r14, r19, r6, r16, r18, r20, rbc, r4, r5, re, r4c);
     }
 }
 
@@ -652,6 +664,13 @@ NTSTATUS HwStreamRun(WDFDEVICE Device)
                  TaRd(RX_SWR + 0x105C), TaRd(RX_SWR + 0x200));
         if (g_FsMask != 0) {
             Fs1815DumpRegs("hw run");
+        }
+        if (g_PosVa != NULL) {
+            volatile ULONG *p = (volatile ULONG *)g_PosVa;
+            ULONG f0 = p[0], i0 = p[1], f1, i1;
+            TaSleep(30);
+            f1 = p[0]; i1 = p[1];
+            LogPrint("dsp pos: t0=%u/%u t30=%u/%u\r\n", f0, i0, f1, i1);
         }
         g_Running = TRUE;
     }

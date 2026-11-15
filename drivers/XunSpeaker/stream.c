@@ -289,9 +289,20 @@ static NTSTATUS SpkRun(ACXSTREAM Stream)
     KeReleaseSpinLock(&s->Lock, irql);
     WdfTimerStart(s->Timer, WDF_REL_TIMEOUT_IN_MS(SPK_TIMER_MS));
     {
-        ULONG idx0 = 0;
+        ULONG idx0 = 0, nz = 0, i, n = s->PacketSize / sizeof(SHORT);
+        LONG peak = 0;
+        const SHORT *pcm = (const SHORT *)s->Va;
         BOOLEAN ok = HwReadPosition(&idx0);
-        LogPrint("run (hw %08x), dsp index at start %u (%u), base packet %u\r\n", hw, idx0, ok, s->RunBase);
+        for (i = 0; i < n && i < 960; i++) {
+            LONG v = pcm[i];
+            if (v != 0) {
+                nz++;
+                if (v < 0) v = -v;
+                if (v > peak) peak = v;
+            }
+        }
+        LogPrint("run (hw %08x), dsp index at start %u (%u), base packet %u, pcm nz=%u/%u peak=%d\r\n",
+                 hw, idx0, ok, s->RunBase, nz, (n < 960 ? n : 960), peak);
     }
     return STATUS_SUCCESS;
 }
