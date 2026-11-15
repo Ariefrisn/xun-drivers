@@ -1582,6 +1582,12 @@ static VOID BlPanel(BOOLEAN On)
     }
     done = BlApply(g_Brightness, On);
     LogPrint("panel %s (backlight %u%%): %s\n", On ? "on" : "off", g_Brightness, done ? "done" : "NO DONE");
+    {
+        ULONG panelOff = On ? 0u : 1u;
+        (VOID)RtlWriteRegistryValue(RTL_REGISTRY_ABSOLUTE,
+                                    L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control",
+                                    L"XunPanelOff", REG_DWORD, &panelOff, sizeof(panelOff));
+    }
 }
 
 VOID DispSetPanelPower(BOOLEAN On)

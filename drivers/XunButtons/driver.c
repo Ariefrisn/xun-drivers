@@ -37,6 +37,22 @@
 
 #define POLL_MS 30
 
+static BOOLEAN IsPanelOff(VOID) {
+  ULONG val = 0;
+  RTL_QUERY_REGISTRY_TABLE q[2];
+  RtlZeroMemory(q, sizeof(q));
+  q[0].Flags = RTL_QUERY_REGISTRY_DIRECT;
+  q[0].Name = L"XunPanelOff";
+  q[0].EntryContext = &val;
+  q[0].DefaultType = REG_DWORD;
+  q[0].DefaultData = &val;
+  q[0].DefaultLength = sizeof(val);
+  RtlQueryRegistryValues(RTL_REGISTRY_ABSOLUTE,
+                         L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control",
+                         q, NULL, NULL);
+  return val != 0;
+}
+
 static BOOLEAN PwrOffExists(VOID) {
   UNICODE_STRING name;
   OBJECT_ATTRIBUTES oa;
@@ -397,11 +413,25 @@ static VOID PollThread(PVOID Context) {
             LogPrint("keys: power=0 (release, ticks=%u)\n", ctx->PwrHoldTicks);
             if (!ctx->PwrLongSent) {
               LARGE_INTEGER d;
-              LogPrint("keys: short press -> Win+L (Lock)\n");
-              SendKeyReport(ctx, 0x08, 0x0F); /* Left GUI + L */
-              d.QuadPart = -500000LL;         /* 50 ms */
-              KeDelayExecutionThread(KernelMode, FALSE, &d);
-              SendKeyReport(ctx, 0x00, 0x00);
+              if (IsPanelOff()) {
+                LogPrint("keys: short press (panel off) -> wake (Shift)\n");
+                SendKeyReport(ctx, 0x02, 0x00); /* Left Shift wake */
+                d.QuadPart = -500000LL;
+                KeDelayExecutionThread(KernelMode, FALSE, &d);
+                SendKeyReport(ctx, 0x00, 0x00);
+              } else {
+                LogPrint("keys: short press -> Win+L (Lock) + Display Off\n");
+                SendKeyReport(ctx, 0x08, 0x0F); /* Left GUI + L */
+                d.QuadPart = -500000LL;         /* 50 ms */
+                KeDelayExecutionThread(KernelMode, FALSE, &d);
+                SendKeyReport(ctx, 0x00, 0x00);
+                d.QuadPart = -3500000LL;        /* 350 ms for lock screen */
+                KeDelayExecutionThread(KernelMode, FALSE, &d);
+                SendReport(ctx, 1, 1);          /* Turn off display (PBUTTONACTION=4) */
+                d.QuadPart = -500000LL;         /* 50 ms */
+                KeDelayExecutionThread(KernelMode, FALSE, &d);
+                SendReport(ctx, 1, 0);
+              }
             }
           }
         }
