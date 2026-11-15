@@ -250,7 +250,7 @@ static NTSTATUS CodecBringUp(VOID)
     SwrWr(VA_SWR, 1, 0x340D, 0xBC); SwrWr(VA_SWR, 1, 0x340E, 0xBC); SwrWr(VA_SWR, 1, 0x340F, 0xBC);
     SwrWr(VA_SWR, 1, 0x3408, 0x03);
     SwrWr(VA_SWR, 1, 0x3408, 0x07); SwrWr(VA_SWR, 1, 0x3409, 0x0D); SwrWr(VA_SWR, 1, 0x344F, 0x01);
-    SwrWr(VA_SWR, 1, 0x344E, 0x07); SwrWr(VA_SWR, 1, 0x3133, 0x81); SwrWr(VA_SWR, 1, 0x3414, 0x02);
+    SwrWr(VA_SWR, 1, 0x344E, 0x04); SwrWr(VA_SWR, 1, 0x3133, 0x81); SwrWr(VA_SWR, 1, 0x3414, 0x02);
     TaSleep(5);
     SwrWr(VA_SWR, 1, 0x340B, 0x15);                 /* AUX PATH Mode: live xun ftrace START (0x15) */
     SwrWr(VA_SWR, 1, 0x3128, 0x00);                 /* AUX PGA init 0x00 before enable */
@@ -261,7 +261,9 @@ static NTSTATUS CodecBringUp(VOID)
     SwrWr(VA_SWR, 1, 0x3008, 0x41); SwrWr(VA_SWR, 1, 0x30AF, 0xF0); SwrWr(VA_SWR, 1, 0x3008, 0xC1);
     SwrWr(VA_SWR, 1, 0x3098, 0x3A);
     SwrWr(VA_SWR, 1, 0x3408, 0x07); SwrWr(VA_SWR, 1, 0x3409, 0x0D);
-    SwrWr(VA_SWR, 1, 0x3450, 0x01);                 /* RDAC3_MUX = RX1 */
+    SwrWr(VA_SWR, 1, 0x3450, 0x00);                 /* RDAC3_MUX: live xun wcd937x.txt (0x00) */
+    SwrWr(VA_SWR, 1, 0x30E9, 0x20);                 /* AUX PA bias: live xun wcd937x.txt (0x20->0x22) */
+    SwrWr(VA_SWR, 1, 0x30E9, 0x22);
     SwrWr(VA_SWR, 1, 0x3009, 0x0C);
     g_CodecUp = TRUE;
     ApplyVolume();
