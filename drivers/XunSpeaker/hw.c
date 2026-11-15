@@ -9,6 +9,7 @@
 #include "tspk.h"
 #include "ta.h"
 #include "rxtab.h"
+#include "wcd_dump_regs.h"
 #include "xun_qup_lock.h"
 
 #define RX_MACRO   0x0A600000ULL
@@ -33,7 +34,7 @@
 #define APM_MEM_MAP       0x0100100C
 #define APM_MEM_UNMAP     0x0100100D
 
-static BOOLEAN  g_CodecUp, g_PortsUp, g_GraphOpen, g_Stopped, g_Running;
+static BOOLEAN  g_CodecUp, g_PortsUp, g_GraphOpen, g_Stopped, g_Running, g_FullDumpDone;
 static PULONG   g_PosVa;                       /* 4 KiB DSP position buffer */
 static PHYSICAL_ADDRESS g_PosPa;
 static ULONG    g_RingMap, g_PosMap;           /* DSP mem map handles */
@@ -710,6 +711,92 @@ NTSTATUS HwStreamPrepare(WDFDEVICE Device, PHYSICAL_ADDRESS RingPa, ULONG RingBy
     return status;
 }
 
+static VOID FullHwDumpOnce(VOID)
+{
+    static const ULONG rslvRanges[][2] = {
+        { 0x040, 0x060 }, { 0x100, 0x140 }, { 0x200, 0x240 }, { 0x300, 0x340 }, { 0x400, 0x440 }
+    };
+    ULONG k, r, j;
+    CHAR buf[256];
+    size_t pos;
+
+    if (g_FullDumpDone) {
+        return;
+    }
+    g_FullDumpDone = TRUE;
+    LogPrint("==== FULL_HW_DUMP_START ====\r\n");
+    LogPrint("DUMP_GPIO 70=%08x/%08x 92=%08x/%08x 106=%08x/%08x\r\n",
+             TaRd(0x00546000ULL), TaRd(0x00546004ULL),
+             TaRd(0x0055C000ULL), TaRd(0x0055C004ULL),
+             TaRd(0x0096A000ULL), TaRd(0x0096A004ULL));
+
+    for (k = 0; k < ARRAYSIZE(g_FsAddrs); k++) {
+        if (!(g_FsMask & (1u << k))) {
+            continue;
+        }
+        for (r = 0; r < 0xC0; r += 16) {
+            pos = 0;
+            buf[0] = '\0';
+            for (j = 0; j < 16; j++) {
+                USHORT v = 0xFFFF;
+                (VOID)TaI2cRead16(g_FsAddrs[k], (UCHAR)(r + j), &v);
+                (VOID)RtlStringCbPrintfA(buf + pos, sizeof(buf) - pos, " %04x", v);
+                RtlStringCbLengthA(buf, sizeof(buf), &pos);
+            }
+            LogPrint("DUMP_FS %02x +%02x:%s\r\n", g_FsAddrs[k], r, buf);
+        }
+    }
+
+    for (r = 0; r < 0x600; r += 64) {
+        pos = 0;
+        buf[0] = '\0';
+        for (j = 0; j < 64; j += 4) {
+            (VOID)RtlStringCbPrintfA(buf + pos, sizeof(buf) - pos, " %02x", (UCHAR)(TaRd(RX_MACRO + r + j) & 0xFFu));
+            RtlStringCbLengthA(buf, sizeof(buf), &pos);
+        }
+        LogPrint("DUMP_RXM %03x:%s\r\n", r, buf);
+    }
+
+    for (r = 0; r < 0x800; r += 4) {
+        ULONG v = TaRd(RX_SWR + r);
+        if (v != 0) {
+            LogPrint("DUMP_RXS %04x=%08x\r\n", r, v);
+        }
+    }
+    for (r = 0x1000; r < 0x1500; r += 4) {
+        ULONG v = TaRd(RX_SWR + r);
+        if (v != 0) {
+            LogPrint("DUMP_RXS %04x=%08x\r\n", r, v);
+        }
+    }
+
+    for (k = 0; k < ARRAYSIZE(rslvRanges); k++) {
+        for (r = rslvRanges[k][0]; r < rslvRanges[k][1]; r += 16) {
+            pos = 0;
+            buf[0] = '\0';
+            for (j = 0; j < 16; j++) {
+                LONG v = SwrRd(RX_SWR, 1, r + j);
+                (VOID)RtlStringCbPrintfA(buf + pos, sizeof(buf) - pos, " %02x", (v < 0) ? 0xFFu : (ULONG)(v & 0xFF));
+                RtlStringCbLengthA(buf, sizeof(buf), &pos);
+            }
+            LogPrint("DUMP_RSLV %03x:%s\r\n", r, buf);
+        }
+    }
+
+    for (k = 0; k < ARRAYSIZE(g_WcdDumpRegs); k += 8) {
+        pos = 0;
+        buf[0] = '\0';
+        for (j = 0; j < 8 && (k + j) < ARRAYSIZE(g_WcdDumpRegs); j++) {
+            USHORT reg = g_WcdDumpRegs[k + j];
+            LONG v = SwrRd(VA_SWR, 1, reg);
+            (VOID)RtlStringCbPrintfA(buf + pos, sizeof(buf) - pos, " %04x=%02x", reg, (v < 0) ? 0xFFu : (ULONG)(v & 0xFF));
+            RtlStringCbLengthA(buf, sizeof(buf), &pos);
+        }
+        LogPrint("DUMP_WCD%s\r\n", buf);
+    }
+    LogPrint("==== FULL_HW_DUMP_END ====\r\n");
+}
+
 NTSTATUS HwStreamRun(WDFDEVICE Device)
 {
     NTSTATUS status;
@@ -766,6 +853,7 @@ NTSTATUS HwStreamRun(WDFDEVICE Device)
         if (g_FsMask != 0) {
             Fs1815DumpRegs("hw run");
         }
+        FullHwDumpOnce();
         if (g_PosVa != NULL) {
             volatile ULONG *p = (volatile ULONG *)g_PosVa;
             ULONG f0 = p[0], i0 = p[1], f1, i1;
