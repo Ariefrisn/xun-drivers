@@ -1,10 +1,10 @@
 /*
- * XunUsb - DWC3 USB Host Mode bring-up + xHCI child PDO for Redmi Pad SE (xun, SM6225).
- * Hardware references from hardware_reference/devicetree/live_fdt.dts:
- *   - dwc3@4e00000: reg 0x04E00000 (0xE000), GIC SPI 0xFF (GSIV 287), SMMU SID 0x120
- *   - qcom,dwc-usb3-msm: QSCRATCH 0x04EF8800, maximum-speed = "high-speed"
- *   - hsphy@1613000 (snps-femto): 0x01613000, EUD 0x01612000, override 6C=A5, 70=8C, 74=16
- *   - gcc_usb30_prim_gdsc: 0x0141A004
+ * XunUsb - LowerFilter for ACPI\PNP0D10 (USBXHCI.SYS) on Redmi Pad SE (xun, SM6225).
+ * Runs before USBXHCI.SYS PrepareHardware to initialize:
+ *   - SMMU SID 0x120 (0x0C600000) identity bypass
+ *   - GCC gcc_usb30_prim_gdsc (0x0141A004) & USB clocks
+ *   - SNPS Femto HS PHY (0x01613000, EUD 0x01612000, override 6C=A5, 70=8C, 74=16)
+ *   - QSCRATCH (0x04EF8800) HS-only + DWC3 (0x04E00000) Host Mode (GCTL.PRTCAPDIR = 1)
  */
 #include "driver.h"
 
@@ -20,7 +20,6 @@
 
 #define DWC3_PA         0x04E00000ULL
 #define DWC3_SIZE       0x100000
-#define DWC3_XHCI_SIZE  0x8000
 #define DWC3_GCTL       0xC110
 #define DWC3_GUSB2PHY   0xC200
 #define DWC3_GUSB3PIPE  0xC2C0
@@ -31,7 +30,6 @@
 #define SMMU_PA         0x0C600000ULL
 #define SMMU_SIZE       0x80000
 #define USB_SMMU_SID    0x120u
-#define USB_GSIV        (0xFFu + 32u)
 
 typedef struct _USB_CTX {
     volatile UCHAR *Gcc;
@@ -39,7 +37,6 @@ typedef struct _USB_CTX {
     volatile UCHAR *HsPhy;
     volatile UCHAR *Dwc3;
     volatile UCHAR *Smmu;
-    BOOLEAN         ChildAdded;
 } USB_CTX, *PUSB_CTX;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(USB_CTX, GetUsbCtx)
@@ -49,8 +46,6 @@ static EVT_WDF_DRIVER_UNLOAD           EvtUnload;
 static EVT_WDF_DRIVER_DEVICE_ADD       EvtDeviceAdd;
 static EVT_WDF_DEVICE_PREPARE_HARDWARE EvtPrepareHw;
 static EVT_WDF_DEVICE_RELEASE_HARDWARE EvtReleaseHw;
-static EVT_WDF_DEVICE_RESOURCES_QUERY  EvtPdoResources;
-static EVT_WDF_DEVICE_RESOURCE_REQUIREMENTS_QUERY EvtPdoRequirements;
 
 static VOID SleepMs(ULONG Ms)
 {
@@ -176,117 +171,6 @@ static VOID InitHsPhyAndDwc3Host(PUSB_CTX Ctx)
              Rd32(Ctx->Dwc3, 0x20), Rd32(Ctx->Dwc3, 0x24), Rd32(Ctx->Dwc3, 0x420));
 }
 
-static NTSTATUS BuildXhciResList(_In_ WDFCMRESLIST List)
-{
-    CM_PARTIAL_RESOURCE_DESCRIPTOR desc;
-    NTSTATUS status;
-
-    RtlZeroMemory(&desc, sizeof(desc));
-    desc.Type = CmResourceTypeMemory;
-    desc.ShareDisposition = CmResourceShareDeviceExclusive;
-    desc.Flags = CM_RESOURCE_MEMORY_READ_WRITE;
-    desc.u.Memory.Start.QuadPart = (LONGLONG)DWC3_PA;
-    desc.u.Memory.Length = DWC3_XHCI_SIZE;
-    status = WdfCmResourceListAppendDescriptor(List, &desc);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-
-    RtlZeroMemory(&desc, sizeof(desc));
-    desc.Type = CmResourceTypeInterrupt;
-    desc.ShareDisposition = CmResourceShareShared;
-    desc.Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-    desc.u.Interrupt.Level = 0;
-    desc.u.Interrupt.Vector = USB_GSIV;
-    desc.u.Interrupt.Affinity = (KAFFINITY)-1;
-    return WdfCmResourceListAppendDescriptor(List, &desc);
-}
-
-static NTSTATUS EvtPdoResources(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST Resources)
-{
-    UNREFERENCED_PARAMETER(Device);
-    return BuildXhciResList(Resources);
-}
-
-static NTSTATUS EvtPdoRequirements(_In_ WDFDEVICE Device, _In_ WDFIORESREQLIST IoResourceRequirementsList)
-{
-    WDFIORESLIST resList;
-    IO_RESOURCE_DESCRIPTOR desc;
-    NTSTATUS status;
-
-    UNREFERENCED_PARAMETER(Device);
-    status = WdfIoResourceListCreate(IoResourceRequirementsList, WDF_NO_OBJECT_ATTRIBUTES, &resList);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-    RtlZeroMemory(&desc, sizeof(desc));
-    desc.Option = IO_RESOURCE_PREFERRED;
-    desc.Type = CmResourceTypeMemory;
-    desc.ShareDisposition = CmResourceShareDeviceExclusive;
-    desc.Flags = CM_RESOURCE_MEMORY_READ_WRITE;
-    desc.u.Memory.Length = DWC3_XHCI_SIZE;
-    desc.u.Memory.Alignment = 0x1000;
-    desc.u.Memory.MinimumAddress.QuadPart = (LONGLONG)DWC3_PA;
-    desc.u.Memory.MaximumAddress.QuadPart = (LONGLONG)(DWC3_PA + DWC3_XHCI_SIZE - 1);
-    status = WdfIoResourceListAppendDescriptor(resList, &desc);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-
-    RtlZeroMemory(&desc, sizeof(desc));
-    desc.Option = IO_RESOURCE_PREFERRED;
-    desc.Type = CmResourceTypeInterrupt;
-    desc.ShareDisposition = CmResourceShareShared;
-    desc.Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-    desc.u.Interrupt.MinimumVector = USB_GSIV;
-    desc.u.Interrupt.MaximumVector = USB_GSIV;
-    status = WdfIoResourceListAppendDescriptor(resList, &desc);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-    return WdfIoResourceRequirementsListAppendIoResList(IoResourceRequirementsList, resList);
-}
-
-static NTSTATUS CreateXhciChildPdo(_In_ WDFDEVICE Parent)
-{
-    PWDFDEVICE_INIT init;
-    WDFDEVICE child;
-    WDF_PDO_EVENT_CALLBACKS pdoCb;
-    WDF_DEVICE_PNP_CAPABILITIES pnpCaps;
-    UNICODE_STRING hwId = RTL_CONSTANT_STRING(L"ACPI\\PNP0D10");
-    UNICODE_STRING compatId = RTL_CONSTANT_STRING(L"PCI\\CC_0C0330");
-    UNICODE_STRING instId = RTL_CONSTANT_STRING(L"0");
-    NTSTATUS status;
-
-    init = WdfPdoInitAllocate(Parent);
-    if (init == NULL) {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    WDF_PDO_EVENT_CALLBACKS_INIT(&pdoCb);
-    pdoCb.EvtDeviceResourcesQuery = EvtPdoResources;
-    pdoCb.EvtDeviceResourceRequirementsQuery = EvtPdoRequirements;
-    WdfPdoInitSetEventCallbacks(init, &pdoCb);
-
-    status = WdfPdoInitAssignDeviceID(init, &hwId);
-    if (NT_SUCCESS(status)) status = WdfPdoInitAddHardwareID(init, &hwId);
-    if (NT_SUCCESS(status)) status = WdfPdoInitAddCompatibleID(init, &compatId);
-    if (NT_SUCCESS(status)) status = WdfPdoInitAssignInstanceID(init, &instId);
-    if (!NT_SUCCESS(status)) {
-        WdfDeviceInitFree(init);
-        return status;
-    }
-    status = WdfDeviceCreate(&init, WDF_NO_OBJECT_ATTRIBUTES, &child);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-    WDF_DEVICE_PNP_CAPABILITIES_INIT(&pnpCaps);
-    pnpCaps.UniqueID = WdfTrue;
-    WdfDeviceSetPnpCapabilities(child, &pnpCaps);
-    status = WdfFdoAddStaticChild(Parent, child);
-    LogPrint("child xhci pdo: %08x\r\n", status);
-    return status;
-}
-
 static NTSTATUS EvtPrepareHw(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST ResourcesRaw, _In_ WDFCMRESLIST ResourcesTranslated)
 {
     PUSB_CTX ctx = GetUsbCtx(Device);
@@ -295,7 +179,7 @@ static NTSTATUS EvtPrepareHw(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST ResourcesR
     UNREFERENCED_PARAMETER(ResourcesRaw);
     UNREFERENCED_PARAMETER(ResourcesTranslated);
     LogOpen();
-    LogPrint("==== XunUsb %s ====\r\n", XUN_USB_VERSION);
+    LogPrint("==== XunUsb %s (LowerFilter) ====\r\n", XUN_USB_VERSION);
 
     pa.QuadPart = (LONGLONG)GCC_PA;   ctx->Gcc   = (volatile UCHAR *)MmMapIoSpace(pa, GCC_SIZE, MmNonCached);
     pa.QuadPart = (LONGLONG)EUD_PA;   ctx->Eud   = (volatile UCHAR *)MmMapIoSpace(pa, 0x1000, MmNonCached);
@@ -305,17 +189,12 @@ static NTSTATUS EvtPrepareHw(_In_ WDFDEVICE Device, _In_ WDFCMRESLIST ResourcesR
 
     if (!ctx->Gcc || !ctx->Eud || !ctx->HsPhy || !ctx->Dwc3 || !ctx->Smmu) {
         LogPrint("MmMapIoSpace failed\r\n");
-        return STATUS_INSUFFICIENT_RESOURCES;
+        return STATUS_SUCCESS; /* do not block USBXHCI if map fails */
     }
 
     SmmuBypassUsb(ctx->Smmu);
     EnableGdscAndClks(ctx->Gcc);
     InitHsPhyAndDwc3Host(ctx);
-
-    if (!ctx->ChildAdded) {
-        ctx->ChildAdded = TRUE;
-        (VOID)CreateXhciChildPdo(Device);
-    }
     return STATUS_SUCCESS;
 }
 
@@ -338,23 +217,16 @@ static NTSTATUS EvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT Devi
     WDF_PNPPOWER_EVENT_CALLBACKS pnp;
     WDF_OBJECT_ATTRIBUTES attr;
     WDFDEVICE dev;
-    NTSTATUS status;
 
     UNREFERENCED_PARAMETER(Driver);
+    WdfFdoInitSetFilter(DeviceInit);
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
     pnp.EvtDevicePrepareHardware = EvtPrepareHw;
     pnp.EvtDeviceReleaseHardware = EvtReleaseHw;
     WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnp);
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attr, USB_CTX);
-    status = WdfDeviceCreate(&DeviceInit, &attr, &dev);
-    if (NT_SUCCESS(status)) {
-        WDF_DEVICE_STATE state;
-        WDF_DEVICE_STATE_INIT(&state);
-        state.NotDisableable = WdfFalse;
-        WdfDeviceSetDeviceState(dev, &state);
-    }
-    return status;
+    return WdfDeviceCreate(&DeviceInit, &attr, &dev);
 }
 
 static VOID EvtUnload(_In_ WDFDRIVER Driver)
@@ -370,4 +242,3 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
     cfg.EvtDriverUnload = EvtUnload;
     return WdfDriverCreate(DriverObject, RegistryPath, WDF_NO_OBJECT_ATTRIBUTES, &cfg, WDF_NO_HANDLE);
 }
-
