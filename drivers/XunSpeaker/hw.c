@@ -207,37 +207,21 @@ static NTSTATUS CodecBringUp(VOID)
     TaWr(RX_MACRO + 0x100, 0x03);                    /* keep MCLK_CONTROL enabled (g_RxStock had 0x00) */
     TaWr(RX_MACRO + 0x104, 0x01);                    /* FS_CNT_CONTROL enabled */
     TaWr(RX_MACRO + 0x108, 0x01);                    /* SWR_CONTROL enabled */
-    TaWr(RX_MACRO + 0x028, 0x80);                    /* HPHL_COMP_WR_LSB: LUT bypass (rx_macro_hphdelay_lutbypass) */
-    TaWr(RX_MACRO + 0x03C, 0x80);                    /* HPHR_COMP_WR_LSB: LUT bypass */
-    TaWr(RX_MACRO + 0x81C, 0x08);                    /* COMPANDER0_CTL7: clear bit 5 shutdown */
-    TaWr(RX_MACRO + 0x85C, 0x08);                    /* COMPANDER1_CTL7: clear bit 5 shutdown */
     TaWr(RX_MACRO + 0x180, 0x70);                    /* RX INT0_1 MIX1 INP1 = RX2 (AIF2_PB ch0) */
     TaWr(RX_MACRO + 0x188, 0x07);                    /* RX INT1_1 MIX1 INP0 = RX2 (AIF2_PB ch0) */
     TaWr(RX_MACRO + 0x190, 0x08);                    /* RX INT2_1 MIX1 INP0 = RX3 (AIF2_PB ch1) */
     TaWr(RX_MACRO + 0x200, 0x01);                    /* CLSH enable (rx_macro_config_classh) */
-    TaWr(RX_MACRO + 0x208, 0x00);                    /* CLSH_DECAY_CTRL */
-    TaWr(RX_MACRO + 0x20C, 0x39);                    /* CLSH_HPH_V_PA (ear_mode=1 -> 0x39) */
+    TaWr(RX_MACRO + 0x208, 0x00);                    /* CLSH_HPH_V_PA (ear_mode=1 -> 0x00) */
+    TaWr(RX_MACRO + 0x20C, 0x39);                    /* CLSH_DECAY_CTRL (ear_mode=1 -> 0x39) */
     TaWr(RX_MACRO + 0x21C, 0x00);                    /* CLSH_K2_MSB */
-    TaWr(RX_MACRO + 0x220, 0xC0);                    /* CLSH_K2_LSB (0xC0 for INT0/INT1) */
-    TaWr(RX_MACRO + 0x404, 0x5C);                    /* INT0_CFG1: CLSH_EN|DSM_CLK|CLSH_DSM_OUT|ESM_EN */
-    TaWr(RX_MACRO + 0x408, 0x77);                    /* INT0_CFG2: RX_PATH_CLK_EN|EAR_LUT_BYPASS|DEM_INP */
-    TaWr(RX_MACRO + 0x40C, 0x03);                    /* INT0_INTERP_CTL: enable interp clk bits [1:0] */
-    TaWr(RX_MACRO + 0x410, 0x03);                    /* INT0_CFG4: 48kHz compander rate */
+    TaWr(RX_MACRO + 0x220, 0xC0);                    /* CLSH_K2_LSB (0xC0 for INT0) */
+    TaWr(RX_MACRO + 0x404, 0x5C);                    /* INT0_CFG1: CLSH_EN|DSM_CLK|FS_RATE|ESM_EN */
+    TaWr(RX_MACRO + 0x408, 0x67);                    /* INT0_CFG0: 0x64 | EAR_LUT_BYPASS(0x02) | CLSH_DSM_OUT(0x01) */
     TaWr(RX_MACRO + 0x42C, 0x14);                    /* INT0_ESM_CTL */
-    TaWr(RX_MACRO + 0x434, 0x00);
-    TaWr(RX_MACRO + 0x438, 0x00);
-    TaWr(RX_MACRO + 0x440, 0x01);                    /* INT0 DSM_OUT_EN bit 0 */
-    TaWr(RX_MACRO + 0x484, 0x5C);                    /* INT1_CFG1: CLSH_EN|DSM_CLK|CLSH_DSM_OUT|ESM_EN */
-    TaWr(RX_MACRO + 0x488, 0x75);                    /* INT1_CFG2: RX_PATH_CLK_EN|DEM_INP */
-    TaWr(RX_MACRO + 0x48C, 0x03);                    /* INT1_INTERP_CTL: enable interp clk bits [1:0] */
-    TaWr(RX_MACRO + 0x490, 0x03);                    /* INT1_CFG4: 48kHz compander rate */
-    TaWr(RX_MACRO + 0x4AC, 0x14);                    /* INT1_ESM_CTL */
-    TaWr(RX_MACRO + 0x4B4, 0x00);
-    TaWr(RX_MACRO + 0x4B8, 0x00);
-    TaWr(RX_MACRO + 0x4C0, 0x01);                    /* INT1 DSM_OUT_EN bit 0 */
-    TaWr(RX_MACRO + 0x504, 0x18);                    /* INT2_CFG1: DSM_CLK|CLSH_DSM_OUT */
-    TaWr(RX_MACRO + 0x508, 0x71);                    /* INT2_CFG2: RX_PATH_CLK_EN|DEM_INP */
-    TaWr(RX_MACRO + 0x50C, 0x03);                    /* INT2_INTERP_CTL: enable interp clk bits [1:0] */
+    TaWr(RX_MACRO + 0x440, 0x09);                    /* INT0 interp/DSM out enable (preserve bit 3 = 0x08 from g_RxStock) */
+    TaWr(RX_MACRO + 0x484, 0x18);                    /* INT1_CFG1: DSM_CLK|FS_RATE */
+    TaWr(RX_MACRO + 0x4C0, 0x09);                    /* INT1 interp/DSM out enable (preserve bit 3 = 0x08 from g_RxStock) */
+    TaWr(RX_MACRO + 0x504, 0x18);                    /* INT2_CFG1: DSM_CLK|FS_RATE */
     TaWr(RX_MACRO + 0x54C, 0x01);                    /* INT2 DSM_OUT_EN bit 0 */
     TaWr(RX_MACRO + 0x400, 4); TaWr(RX_MACRO + 0x480, 4); TaWr(RX_MACRO + 0x500, 4);
     {
@@ -302,14 +286,14 @@ static VOID PortsAndPa(VOID)
     static const ULONG slv[][2] = {
         { 0x103, 3 }, { 0x130, 3 }, { 0x132, 7 }, { 0x133, 0 }, { 0x134, 3 },   /* Port 1: HPHL+HPHR/EAR */
         { 0x203, 7 }, { 0x230, 1 }, { 0x232, 0x1F }, { 0x233, 0 }, { 0x234, 0 }, { 0x236, 0x36 }, /* Port 2: CLSH */
-        { 0x403, 0 }, { 0x430, 1 }, { 0x432, 7 }, { 0x433, 0 }, { 0x434, 1 }    /* Port 4: LO/AUX (1 ch!) */
+        { 0x403, 1 }, { 0x430, 1 }, { 0x432, 7 }, { 0x433, 0 }, { 0x434, 1 }    /* Port 4: LO/AUX (p9_stock: 403=1, 142C=7) */
     };
     ULONG i;
 
     /* Bank 1 on Master + Slave, then broadcast bank switch */
     TaWr(RX_SWR + 0x1164, 0x01000307); TaWr(RX_SWR + 0x117C, 0); TaWr(RX_SWR + 0x112C, 7); TaWr(RX_SWR + 0x1174, 0);
     TaWr(RX_SWR + 0x1264, 0x0100001F); TaWr(RX_SWR + 0x127C, 0); TaWr(RX_SWR + 0x122C, 7); TaWr(RX_SWR + 0x1274, 0x63);
-    TaWr(RX_SWR + 0x1464, 0x01000107); TaWr(RX_SWR + 0x147C, 0); TaWr(RX_SWR + 0x142C, 0); TaWr(RX_SWR + 0x1474, 0);
+    TaWr(RX_SWR + 0x1464, 0x01000107); TaWr(RX_SWR + 0x147C, 0); TaWr(RX_SWR + 0x142C, 7); TaWr(RX_SWR + 0x1474, 0);
     for (i = 0; i < ARRAYSIZE(slv); i++) {
         SwrWr(RX_SWR, 1, slv[i][0], slv[i][1]);
     }
@@ -318,13 +302,13 @@ static VOID PortsAndPa(VOID)
     TaSleep(5);
     SwrWr(VA_SWR, 1, 0x30A4, 0x4E);                 /* EAR DAC/PA active (stock 0x4E) */
     SwrWr(VA_SWR, 1, 0x3467, 0x05);
-    SwrWr(VA_SWR, 1, 0x3128, 0x90);                 /* AUX PGA enable (bit 7), AUX PATH Mode = HP_MODE (bit 4 = 1 matching 0x340B bit 6) */
-    SwrWr(VA_SWR, 1, 0x3008, 0xC3);                 /* RX_CTRL_0: HPH + EAR class-H / bias enable */
-    SwrWr(VA_SWR, 1, 0x3009, 0xCC);                 /* WCD937X_ANA_HPH: enable HPHL/HPHR PAs as well as EAR/AUX */
-    SwrWr(VA_SWR, 1, 0x300B, 0x92);                 /* WCD937X_ANA_EAR: PRE_PMU bit 7 + G_0_DB */
+    SwrWr(VA_SWR, 1, 0x3128, 0x80);                 /* AUX PGA enable (bit 7), AUX PATH Mode bit 4 = 0 matching 0x340B = 0x55 (wcd937x_aux_path_mode_put) */
+    SwrWr(VA_SWR, 1, 0x3008, 0xC1);                 /* RX_CTRL_0: HPH/EAR bias on before EAR PA POST_PMU */
+    SwrWr(VA_SWR, 1, 0x3009, 0x0C);                 /* WCD937X_ANA_HPH: keep HPHL/HPHR PA off (stock 0x0C) so EAR PA isn't contended */
+    SwrWr(VA_SWR, 1, 0x300B, 0x92);                 /* WCD937X_ANA_EAR: EAR_ENABLE bit 7 (0x80) MUST STAY SET while active + G_0_DB (0x12) */
     SwrWr(VA_SWR, 1, 0x300A, 0x40);                 /* Keep bit 7 (0x80) clear while active (pulsed only on POST_PMD) */
-    TaSleep(6);                                     /* ear_pa POST_PMU 6ms settle */
-    SwrWr(VA_SWR, 1, 0x300B, 0x12);                 /* WCD937X_ANA_EAR: POST_PMU clears bit 7 (stock 0x12) */
+    TaSleep(6);                                     /* wcd937x_codec_enable_ear_pa POST_PMU 6ms settle */
+    SwrWr(VA_SWR, 1, 0x3008, 0xC3);                 /* wcd937x_codec_enable_ear_pa POST_PMU sets bit 1 (0x02) of 0x3008 */
     /* Keep 0x3467 = 0x05 while active (stock ear_pa/aux_pa only clear it on POST_PMD) */
     SwrWr(VA_SWR, 1, 0x346B, 0x4C);
     SwrWr(VA_SWR, 1, 0x346C, 0x7F);
@@ -691,20 +675,12 @@ NTSTATUS HwStreamRun(WDFDEVICE Device)
         TaWr(RX_MACRO + 0x188, 0x07);                   /* RX INT1_1 MIX1 INP0 = RX2 (AIF2_PB ch0) */
         TaWr(RX_MACRO + 0x190, 0x08);                   /* RX INT2_1 MIX1 INP0 = RX3 (AIF2_PB ch1) */
         TaWr(RX_MACRO + 0x404, 0x5C);
-        TaWr(RX_MACRO + 0x408, 0x77);
-        TaWr(RX_MACRO + 0x40C, 0x03);
-        TaWr(RX_MACRO + 0x410, 0x03);
+        TaWr(RX_MACRO + 0x408, 0x67);
         TaWr(RX_MACRO + 0x42C, 0x14);
-        TaWr(RX_MACRO + 0x440, 0x01);
-        TaWr(RX_MACRO + 0x484, 0x5C);
-        TaWr(RX_MACRO + 0x488, 0x75);
-        TaWr(RX_MACRO + 0x48C, 0x03);
-        TaWr(RX_MACRO + 0x490, 0x03);
-        TaWr(RX_MACRO + 0x4AC, 0x14);
-        TaWr(RX_MACRO + 0x4C0, 0x01);
+        TaWr(RX_MACRO + 0x440, 0x09);
+        TaWr(RX_MACRO + 0x484, 0x18);
+        TaWr(RX_MACRO + 0x4C0, 0x09);
         TaWr(RX_MACRO + 0x504, 0x18);
-        TaWr(RX_MACRO + 0x508, 0x71);
-        TaWr(RX_MACRO + 0x50C, 0x03);
         TaWr(RX_MACRO + 0x54C, 0x01);
         TaWr(RX_MACRO + 0x418, 0x04);
         TaWr(RX_MACRO + 0x400, 0x24);                   /* RX0 path + interp clk on, unmuted (bit 4=0) */
