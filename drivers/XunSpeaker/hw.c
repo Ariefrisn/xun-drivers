@@ -223,7 +223,7 @@ static NTSTATUS CodecBringUp(VOID)
     SwrWr(VA_SWR, 1, 0x340D, 0xBC); SwrWr(VA_SWR, 1, 0x340E, 0xBC); SwrWr(VA_SWR, 1, 0x340F, 0xBC);
     SwrWr(VA_SWR, 1, 0x3408, 0x03);
     SwrWr(VA_SWR, 1, 0x3408, 0x07); SwrWr(VA_SWR, 1, 0x3409, 0x0D); SwrWr(VA_SWR, 1, 0x344F, 0x01);
-    SwrWr(VA_SWR, 1, 0x344E, 0x04); SwrWr(VA_SWR, 1, 0x3133, 0x81); SwrWr(VA_SWR, 1, 0x3414, 0x02);
+    SwrWr(VA_SWR, 1, 0x344E, 0x07); SwrWr(VA_SWR, 1, 0x3133, 0x81); SwrWr(VA_SWR, 1, 0x3414, 0x02);
     TaSleep(5);
     SwrWr(VA_SWR, 1, 0x30A4, 0x4A);                 /* ear_dac_event PRE_PMU clears bit 2 */
     SwrWr(VA_SWR, 1, 0x30A4, 0x4E);                 /* ear_dac_event/enable_ear_pa POST_PMU: 0x4E (stock) */
@@ -280,7 +280,7 @@ static VOID PortsAndPa(VOID)
     SwrWr(VA_SWR, 1, 0x3467, 0x05);
     SwrWr(VA_SWR, 1, 0x3128, 0x80);                 /* AUX PGA enable (bit 7), AUX PATH Mode = HP_MODE (bit 4 = 0) */
     SwrWr(VA_SWR, 1, 0x3008, 0xC3);                 /* RX_CTRL_0: HPH + EAR class-H / bias enable */
-    SwrWr(VA_SWR, 1, 0x3009, 0x0C);                 /* WCD937X_ANA_HPH: keep HPH PAs off for speaker path */
+    SwrWr(VA_SWR, 1, 0x3009, 0xCC);                 /* WCD937X_ANA_HPH: enable HPHL/HPHR PAs as well as EAR/AUX */
     SwrWr(VA_SWR, 1, 0x300B, 0x92);                 /* WCD937X_ANA_EAR: PRE_PMU bit 7 + G_0_DB */
     SwrWr(VA_SWR, 1, 0x300A, 0x40);                 /* Keep bit 7 (0x80) clear while active (pulsed only on POST_PMD) */
     TaSleep(6);                                     /* ear_pa POST_PMU 6ms settle */
@@ -508,8 +508,10 @@ static VOID AmpOn(BOOLEAN On)
             (VOID)TaI2cWrite16(g_FsAddrs[k], 0x11, 0x008F);     /* Boost/PLL/Class-D enable */
             status = TaI2cWrite16(g_FsAddrs[k], 0x10, 0x0000);  /* Power UP / unmute */
             (VOID)TaI2cWrite16(g_FsAddrs[k], 0x1F, 0xCA91);     /* unlock before vol */
+            (VOID)TaI2cWrite16(g_FsAddrs[k], 0x0B, 0xCA91);     /* fsm_access_key alt reg (flags & 0x10 == 0) */
             (VOID)TaI2cWrite16(g_FsAddrs[k], 0x06, 0xFF00);     /* 0 dB volume */
             (VOID)TaI2cWrite16(g_FsAddrs[k], 0x16, 0xFF80);     /* fs1815 volume reg 0x16 */
+            (VOID)TaI2cWrite16(g_FsAddrs[k], 0x0B, 0x0000);
             (VOID)TaI2cWrite16(g_FsAddrs[k], 0x1F, 0x0000);     /* lock */
         } else {
             status = TaI2cWrite16(g_FsAddrs[k], 0x10, 0x0001);  /* Power down */
@@ -654,12 +656,12 @@ NTSTATUS HwStreamRun(WDFDEVICE Device)
         LogPrint("rx_macro ctl: 400=%02x 480=%02x 500=%02x vol=%02x/%02x/%02x\r\n",
                  TaRd(RX_MACRO + 0x400), TaRd(RX_MACRO + 0x480), TaRd(RX_MACRO + 0x500),
                  TaRd(RX_MACRO + 0x414), TaRd(RX_MACRO + 0x494), TaRd(RX_MACRO + 0x514));
-        LogPrint("rx_macro mux: 040=%02x 044=%02x 070=%02x 074=%02x 080=%02x 084=%02x 180=%02x 184=%02x 190=%02x 194=%02x\r\n",
+        LogPrint("rx_macro mux: 040=%02x 044=%02x 070=%02x 074=%02x 080=%02x 084=%02x 088=%02x 08c=%02x 180=%02x 190=%02x\r\n",
                  TaRd(RX_MACRO + 0x040), TaRd(RX_MACRO + 0x044),
                  TaRd(RX_MACRO + 0x070), TaRd(RX_MACRO + 0x074),
                  TaRd(RX_MACRO + 0x080), TaRd(RX_MACRO + 0x084),
-                 TaRd(RX_MACRO + 0x180), TaRd(RX_MACRO + 0x184),
-                 TaRd(RX_MACRO + 0x190), TaRd(RX_MACRO + 0x194));
+                 TaRd(RX_MACRO + 0x088), TaRd(RX_MACRO + 0x08C),
+                 TaRd(RX_MACRO + 0x180), TaRd(RX_MACRO + 0x190));
         LogPrint("rx_macro cfg: 100=%02x 104=%02x 108=%02x 200=%02x 204=%02x 220=%02x 234=%02x 404=%02x 418=%02x 484=%02x 498=%02x 504=%02x 518=%02x swr=%08x/%08x\r\n",
                  TaRd(RX_MACRO + 0x100), TaRd(RX_MACRO + 0x104), TaRd(RX_MACRO + 0x108),
                  TaRd(RX_MACRO + 0x200), TaRd(RX_MACRO + 0x204), TaRd(RX_MACRO + 0x220), TaRd(RX_MACRO + 0x234),
