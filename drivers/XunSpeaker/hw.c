@@ -9,7 +9,6 @@
 #include "tspk.h"
 #include "ta.h"
 #include "rxtab.h"
-#include "wcd_dump_regs.h"
 #include "xun_qup_lock.h"
 
 #define RX_MACRO   0x0A600000ULL
@@ -34,7 +33,7 @@
 #define APM_MEM_MAP       0x0100100C
 #define APM_MEM_UNMAP     0x0100100D
 
-static BOOLEAN  g_CodecUp, g_PortsUp, g_GraphOpen, g_Stopped, g_Running, g_FullDumpDone;
+static BOOLEAN  g_CodecUp, g_PortsUp, g_GraphOpen, g_Stopped, g_Running;
 static PULONG   g_PosVa;                       /* 4 KiB DSP position buffer */
 static PHYSICAL_ADDRESS g_PosPa;
 static ULONG    g_RingMap, g_PosMap;           /* DSP mem map handles */
@@ -302,32 +301,34 @@ static VOID ProgramSwrPortBank(ULONG Bank)
     ULONG mb = Bank << 6;
     ULONG sb = Bank << 4;
 
-    /* Port 1 (HPH/EAR, rx_frame_params_default[0]: sint=3, off1=0, off2=0, hstart=0xff, hstop=0xff, wl=1, ch_en=1) */
+    /* Port 1 (HPH/EAR, live xun rx_swr_slave.txt / rx_swr_ctrl.txt) */
     SwrWr(RX_SWR, 1, 0x103, 0x01);
     SwrWr(RX_SWR, 1, 0x120 + sb, 0x01);
     SwrWr(RX_SWR, 1, 0x122 + sb, 0x03);
     SwrWr(RX_SWR, 1, 0x123 + sb, 0x00);
     SwrWr(RX_SWR, 1, 0x124 + sb, 0x00);
     SwrWr(RX_SWR, 1, 0x125 + sb, 0x00);
-    SwrWr(RX_SWR, 1, 0x126 + sb, 0xF0);
+    SwrWr(RX_SWR, 1, 0x126 + sb, 0x00);
+    SwrWr(RX_SWR, 1, 0x128 + sb, 0x01);
     TaWr(RX_SWR + 0x1124 + mb, 0x01000003);
+    TaWr(RX_SWR + 0x1128 + mb, 0x00000001);
     TaWr(RX_SWR + 0x113C + mb, 0x00);
     TaWr(RX_SWR + 0x112C, 0x01);
-    TaWr(RX_SWR + 0x1134 + mb, 0xF0);
+    TaWr(RX_SWR + 0x1134 + mb, 0x00);
 
     /* Port 2 (CLSH, disabled in live xun rx_swr_slave.txt / rx_swr_ctrl.txt) */
     SwrWr(RX_SWR, 1, 0x203, 0x07);
     SwrWr(RX_SWR, 1, 0x220 + sb, 0x00);
-    SwrWr(RX_SWR, 1, 0x222 + sb, 0x1F);
+    SwrWr(RX_SWR, 1, 0x222 + sb, 0x00);
     SwrWr(RX_SWR, 1, 0x223 + sb, 0x00);
     SwrWr(RX_SWR, 1, 0x224 + sb, 0x00);
-    SwrWr(RX_SWR, 1, 0x226 + sb, 0x0F);
+    SwrWr(RX_SWR, 1, 0x226 + sb, 0x00);
     SwrWr(RX_SWR, 1, 0x227 + sb, 0x00);
-    TaWr(RX_SWR + 0x1224 + mb, 0x0100001F);
+    TaWr(RX_SWR + 0x1224 + mb, 0x00);
     TaWr(RX_SWR + 0x123C + mb, 0x00);
-    TaWr(RX_SWR + 0x122C, 0x07);
+    TaWr(RX_SWR + 0x122C, 0x00);
     TaWr(RX_SWR + 0x1230 + mb, 0x00);
-    TaWr(RX_SWR + 0x1234 + mb, 0x63);
+    TaWr(RX_SWR + 0x1234 + mb, 0x00);
 
     /* Port 4 (LO/AUX, disabled in live xun rx_swr_slave.txt / rx_swr_ctrl.txt) */
     SwrWr(RX_SWR, 1, 0x403, 0x00);
@@ -379,6 +380,34 @@ static VOID PortsAndPa(VOID)
     SwrWr(VA_SWR, 1, 0x346B, 0x4C);
     SwrWr(VA_SWR, 1, 0x346C, 0x5F);
     SwrWr(VA_SWR, 1, 0x346D, 0x0F);
+    /* Match remaining WCD937X analog/buck/bias registers to live xun wcd937x_regs.txt */
+    SwrWr(VA_SWR, 1, 0x300E, 0x2C);
+    SwrWr(VA_SWR, 1, 0x300F, 0x0C);
+    SwrWr(VA_SWR, 1, 0x3010, 0x2C);
+    SwrWr(VA_SWR, 1, 0x3014, 0xBD);
+    SwrWr(VA_SWR, 1, 0x3015, 0x09);
+    SwrWr(VA_SWR, 1, 0x3019, 0x10);
+    SwrWr(VA_SWR, 1, 0x301A, 0x18);
+    SwrWr(VA_SWR, 1, 0x301B, 0x48);
+    SwrWr(VA_SWR, 1, 0x301C, 0x90);
+    SwrWr(VA_SWR, 1, 0x301D, 0xA0);
+    SwrWr(VA_SWR, 1, 0x301E, 0xA0);
+    SwrWr(VA_SWR, 1, 0x301F, 0xA0);
+    SwrWr(VA_SWR, 1, 0x3020, 0xA0);
+    SwrWr(VA_SWR, 1, 0x3021, 0xA0);
+    SwrWr(VA_SWR, 1, 0x3022, 0x22);
+    SwrWr(VA_SWR, 1, 0x3023, 0x22);
+    SwrWr(VA_SWR, 1, 0x3025, 0x22);
+    SwrWr(VA_SWR, 1, 0x305B, 0x00);
+    SwrWr(VA_SWR, 1, 0x306C, 0x18);
+    SwrWr(VA_SWR, 1, 0x306F, 0x18);
+    SwrWr(VA_SWR, 1, 0x3072, 0x18);
+    SwrWr(VA_SWR, 1, 0x3099, 0x02);
+    SwrWr(VA_SWR, 1, 0x3120, 0x82);
+    SwrWr(VA_SWR, 1, 0x3121, 0x03);
+    SwrWr(VA_SWR, 1, 0x3122, 0xE6);
+    SwrWr(VA_SWR, 1, 0x31B1, 0x08);
+    SwrWr(VA_SWR, 1, 0x346F, 0x00);
     LogPrint("ports: mcp %08x->%08x (bank %u->%u) frame b0=%08x b1=%08x, irq %08x\r\n",
              mcpPre, mcpPost, curBank, nextBank, TaRd(RX_SWR + 0x101C), TaRd(RX_SWR + 0x105C), TaRd(RX_SWR + 0x200));
     LogPrint("wcd[3008..300B,30A4,3128,3133]: %02x %02x %02x %02x %02x %02x %02x\r\n",
@@ -711,92 +740,6 @@ NTSTATUS HwStreamPrepare(WDFDEVICE Device, PHYSICAL_ADDRESS RingPa, ULONG RingBy
     return status;
 }
 
-static VOID FullHwDumpOnce(VOID)
-{
-    static const ULONG rslvRanges[][2] = {
-        { 0x040, 0x060 }, { 0x100, 0x140 }, { 0x200, 0x240 }, { 0x300, 0x340 }, { 0x400, 0x440 }
-    };
-    ULONG k, r, j;
-    CHAR buf[256];
-    size_t pos;
-
-    if (g_FullDumpDone) {
-        return;
-    }
-    g_FullDumpDone = TRUE;
-    LogPrint("==== FULL_HW_DUMP_START ====\r\n");
-    LogPrint("DUMP_GPIO 70=%08x/%08x 92=%08x/%08x 106=%08x/%08x\r\n",
-             TaRd(0x00546000ULL), TaRd(0x00546004ULL),
-             TaRd(0x0055C000ULL), TaRd(0x0055C004ULL),
-             TaRd(0x0096A000ULL), TaRd(0x0096A004ULL));
-
-    for (k = 0; k < ARRAYSIZE(g_FsAddrs); k++) {
-        if (!(g_FsMask & (1u << k))) {
-            continue;
-        }
-        for (r = 0; r < 0xC0; r += 16) {
-            pos = 0;
-            buf[0] = '\0';
-            for (j = 0; j < 16; j++) {
-                USHORT v = 0xFFFF;
-                (VOID)TaI2cRead16(g_FsAddrs[k], (UCHAR)(r + j), &v);
-                (VOID)RtlStringCbPrintfA(buf + pos, sizeof(buf) - pos, " %04x", v);
-                RtlStringCbLengthA(buf, sizeof(buf), &pos);
-            }
-            LogPrint("DUMP_FS %02x +%02x:%s\r\n", g_FsAddrs[k], r, buf);
-        }
-    }
-
-    for (r = 0; r < 0x600; r += 64) {
-        pos = 0;
-        buf[0] = '\0';
-        for (j = 0; j < 64; j += 4) {
-            (VOID)RtlStringCbPrintfA(buf + pos, sizeof(buf) - pos, " %02x", (UCHAR)(TaRd(RX_MACRO + r + j) & 0xFFu));
-            RtlStringCbLengthA(buf, sizeof(buf), &pos);
-        }
-        LogPrint("DUMP_RXM %03x:%s\r\n", r, buf);
-    }
-
-    for (r = 0; r < 0x800; r += 4) {
-        ULONG v = TaRd(RX_SWR + r);
-        if (v != 0) {
-            LogPrint("DUMP_RXS %04x=%08x\r\n", r, v);
-        }
-    }
-    for (r = 0x1000; r < 0x1500; r += 4) {
-        ULONG v = TaRd(RX_SWR + r);
-        if (v != 0) {
-            LogPrint("DUMP_RXS %04x=%08x\r\n", r, v);
-        }
-    }
-
-    for (k = 0; k < ARRAYSIZE(rslvRanges); k++) {
-        for (r = rslvRanges[k][0]; r < rslvRanges[k][1]; r += 16) {
-            pos = 0;
-            buf[0] = '\0';
-            for (j = 0; j < 16; j++) {
-                LONG v = SwrRd(RX_SWR, 1, r + j);
-                (VOID)RtlStringCbPrintfA(buf + pos, sizeof(buf) - pos, " %02x", (v < 0) ? 0xFFu : (ULONG)(v & 0xFF));
-                RtlStringCbLengthA(buf, sizeof(buf), &pos);
-            }
-            LogPrint("DUMP_RSLV %03x:%s\r\n", r, buf);
-        }
-    }
-
-    for (k = 0; k < ARRAYSIZE(g_WcdDumpRegs); k += 8) {
-        pos = 0;
-        buf[0] = '\0';
-        for (j = 0; j < 8 && (k + j) < ARRAYSIZE(g_WcdDumpRegs); j++) {
-            USHORT reg = g_WcdDumpRegs[k + j];
-            LONG v = SwrRd(VA_SWR, 1, reg);
-            (VOID)RtlStringCbPrintfA(buf + pos, sizeof(buf) - pos, " %04x=%02x", reg, (v < 0) ? 0xFFu : (ULONG)(v & 0xFF));
-            RtlStringCbLengthA(buf, sizeof(buf), &pos);
-        }
-        LogPrint("DUMP_WCD%s\r\n", buf);
-    }
-    LogPrint("==== FULL_HW_DUMP_END ====\r\n");
-}
-
 NTSTATUS HwStreamRun(WDFDEVICE Device)
 {
     NTSTATUS status;
@@ -816,17 +759,20 @@ NTSTATUS HwStreamRun(WDFDEVICE Device)
             g_PortsUp = TRUE;
         }
         AmpOn(TRUE);
+        TaWr(RX_MACRO + 0x07C, 0x00);
         TaWr(RX_MACRO + 0x180, 0x70);                   /* RX INT0_1 MIX1 INP1 = RX2 (AIF2_PB ch0) */
         TaWr(RX_MACRO + 0x190, 0x08);                   /* RX INT2_1 MIX1 INP0 = RX3 (AIF2_PB ch1) */
         TaWr(RX_MACRO + 0x404, 0x48);
         TaWr(RX_MACRO + 0x408, 0x67);
         TaWr(RX_MACRO + 0x40C, 0x8F);
+        TaWr(RX_MACRO + 0x424, 0x08);
         TaWr(RX_MACRO + 0x42C, 0x00);
         TaWr(RX_MACRO + 0x440, 0x09);
         TaWr(RX_MACRO + 0x484, 0x00);
         TaWr(RX_MACRO + 0x4C0, 0x08);
         TaWr(RX_MACRO + 0x504, 0x18);
         TaWr(RX_MACRO + 0x50C, 0x8F);
+        TaWr(RX_MACRO + 0x528, 0x08);
         TaWr(RX_MACRO + 0x54C, 0x01);
         ApplyVolume();
         TaWr(RX_MACRO + 0x418, 0x04);
@@ -853,7 +799,6 @@ NTSTATUS HwStreamRun(WDFDEVICE Device)
         if (g_FsMask != 0) {
             Fs1815DumpRegs("hw run");
         }
-        FullHwDumpOnce();
         if (g_PosVa != NULL) {
             volatile ULONG *p = (volatile ULONG *)g_PosVa;
             ULONG f0 = p[0], i0 = p[1], f1, i1;
