@@ -85,9 +85,10 @@ static VOID InitMaster(ULONGLONG M)
     ULONG cfg;
 
     TaWr(M + 0x008, 1); TaWr(M + 0x008, 1); TaWr(M + 0x1044, 1); TaSleep(2);
+    TaWr(M + 0x100, 0x02684026); TaWr(M + 0x710, 0x000FFFFF);
     TaWr(M + 0x101C, 0x2F0008); TaWr(M + 0x500, 1);
     cfg = TaRd(M + 0x1048);
-    TaWr(M + 0x1048, (cfg & ~0x3E0000u) | (0x1Fu << 17));
+    TaWr(M + 0x1048, (cfg & ~0x3E0000u) | (0x1Fu << 17) | 0x7F00u);
     TaWr(M + 0x314, 3); TaWr(M + 0x1044, 2);
     TaWr(M + 0x04, 2); TaWr(M + 0x208, 0xFFFFFFFF); TaWr(M + 0x204, 0x1FDFD); TaWr(M + 0x210, 0x1FDFD);
     TaWr(M + 0x04, 3); TaWr(M + 0x314, 0x80000003);
@@ -138,11 +139,12 @@ static NTSTATUS SmmuAudio(VOID)
 static VOID ApplyVolume(VOID)
 {
     LONG db = g_Mute ? -84 : g_VolDb;
+    LONG db2 = (db - 5 < -84) ? -84 : (db - 5);
 
     if (g_CodecUp) {
         TaWr(RX_MACRO + 0x414, (ULONG)db & 0xFF);   /* RX_RX0_RX_VOL_CTL, s8 dB (HPHL / EAR) */
         TaWr(RX_MACRO + 0x494, (ULONG)db & 0xFF);   /* RX_RX1_RX_VOL_CTL, s8 dB (HPHR) */
-        TaWr(RX_MACRO + 0x514, (ULONG)db & 0xFF);   /* RX_RX2_RX_VOL_CTL, s8 dB (AUX) */
+        TaWr(RX_MACRO + 0x514, (ULONG)db2 & 0xFF);  /* RX_RX2_RX_VOL_CTL, s8 dB (AUX, stock -5 dB) */
     }
 }
 
@@ -209,7 +211,7 @@ static NTSTATUS CodecBringUp(VOID)
     TaWr(RX_MACRO + 0x108, 0x01);                    /* SWR_CONTROL enabled */
     TaWr(RX_MACRO + 0x08C, 0x00);                    /* live xun bolero.txt (0x00) */
     TaWr(RX_MACRO + 0x180, 0x70);                    /* RX INT0_1 MIX1 INP1 = RX2 (AIF2_PB ch0) */
-    TaWr(RX_MACRO + 0x188, 0x07);                    /* RX INT1_1 MIX1 INP0 = RX2 (AIF2_PB ch0) */
+    TaWr(RX_MACRO + 0x188, 0x00);                    /* live xun bolero_regs.txt (0x00) */
     TaWr(RX_MACRO + 0x190, 0x08);                    /* RX INT2_1 MIX1 INP0 = RX3 (AIF2_PB ch1) */
     TaWr(RX_MACRO + 0x200, 0x01);                    /* CLSH enable (rx_macro_config_classh) */
     TaWr(RX_MACRO + 0x208, 0x00);                    /* CLSH_HPH_V_PA (ear_mode=1 -> 0x00) */
@@ -221,10 +223,10 @@ static NTSTATUS CodecBringUp(VOID)
     TaWr(RX_MACRO + 0x40C, 0x8F);                    /* INT0_CFG2: live xun ftrace (0x8F) */
     TaWr(RX_MACRO + 0x410, 0x03);                    /* INT0_CFG3: live xun bolero.txt (0x03) */
     TaWr(RX_MACRO + 0x414, 0x00);                    /* INT0_VOL_CTL: live xun ftrace (0x00) */
-    TaWr(RX_MACRO + 0x42C, 0x14);                    /* INT0_ESM_CTL */
+    TaWr(RX_MACRO + 0x42C, 0x00);                    /* INT0_ESM_CTL: live xun bolero_regs.txt (0x00) */
     TaWr(RX_MACRO + 0x440, 0x09);                    /* INT0 interp/DSM out enable (preserve bit 3 = 0x08 from g_RxStock) */
-    TaWr(RX_MACRO + 0x484, 0x18);                    /* INT1_CFG1: DSM_CLK|FS_RATE */
-    TaWr(RX_MACRO + 0x4C0, 0x09);                    /* INT1 interp/DSM out enable (preserve bit 3 = 0x08 from g_RxStock) */
+    TaWr(RX_MACRO + 0x484, 0x00);                    /* INT1_CFG1: live xun bolero_regs.txt (0x00) */
+    TaWr(RX_MACRO + 0x4C0, 0x08);                    /* INT1 interp/DSM out: live xun bolero_regs.txt (0x08) */
     TaWr(RX_MACRO + 0x504, 0x18);                    /* INT2_CFG1: DSM_CLK|FS_RATE */
     TaWr(RX_MACRO + 0x50C, 0x8F);                    /* INT2_CFG2: live xun ftrace (0x8F) */
     TaWr(RX_MACRO + 0x514, 0xFB);                    /* INT2_VOL_CTL: live xun ftrace (0xFB) */
@@ -312,13 +314,13 @@ static VOID ProgramSwrPortBank(ULONG Bank)
     TaWr(RX_SWR + 0x112C, 0x01);
     TaWr(RX_SWR + 0x1134 + mb, 0xF0);
 
-    /* Port 2 (CLSH, rx_frame_params_default[1]: sint=0x1f, off1=0, off2=0, hstart=3, hstop=6, wl=7, type=0, ch_en=1) */
+    /* Port 2 (CLSH, disabled in live xun rx_swr_slave.txt / rx_swr_ctrl.txt) */
     SwrWr(RX_SWR, 1, 0x203, 0x07);
-    SwrWr(RX_SWR, 1, 0x220 + sb, 0x01);
+    SwrWr(RX_SWR, 1, 0x220 + sb, 0x00);
     SwrWr(RX_SWR, 1, 0x222 + sb, 0x1F);
     SwrWr(RX_SWR, 1, 0x223 + sb, 0x00);
     SwrWr(RX_SWR, 1, 0x224 + sb, 0x00);
-    SwrWr(RX_SWR, 1, 0x226 + sb, 0x63);
+    SwrWr(RX_SWR, 1, 0x226 + sb, 0x0F);
     SwrWr(RX_SWR, 1, 0x227 + sb, 0x00);
     TaWr(RX_SWR + 0x1224 + mb, 0x0100001F);
     TaWr(RX_SWR + 0x123C + mb, 0x00);
@@ -326,19 +328,19 @@ static VOID ProgramSwrPortBank(ULONG Bank)
     TaWr(RX_SWR + 0x1230 + mb, 0x00);
     TaWr(RX_SWR + 0x1234 + mb, 0x63);
 
-    /* Port 4 (LO/AUX, rx_frame_params_default[3]: sint=7, off1=1, off2=0, hstart=0xff, hstop=0xff, wl=0xff, ch_en=1) */
-    SwrWr(RX_SWR, 1, 0x403, 0x01);
-    SwrWr(RX_SWR, 1, 0x420 + sb, 0x01);
-    SwrWr(RX_SWR, 1, 0x422 + sb, 0x07);
+    /* Port 4 (LO/AUX, disabled in live xun rx_swr_slave.txt / rx_swr_ctrl.txt) */
+    SwrWr(RX_SWR, 1, 0x403, 0x00);
+    SwrWr(RX_SWR, 1, 0x420 + sb, 0x00);
+    SwrWr(RX_SWR, 1, 0x422 + sb, 0x00);
     SwrWr(RX_SWR, 1, 0x423 + sb, 0x00);
-    SwrWr(RX_SWR, 1, 0x424 + sb, 0x01);
+    SwrWr(RX_SWR, 1, 0x424 + sb, 0x00);
     SwrWr(RX_SWR, 1, 0x425 + sb, 0x00);
-    SwrWr(RX_SWR, 1, 0x426 + sb, 0xF0);
+    SwrWr(RX_SWR, 1, 0x426 + sb, 0x00);
     TaWr(RX_SWR + 0x1424 + mb, 0x01000107);
     TaWr(RX_SWR + 0x143C + mb, 0x00);
-    TaWr(RX_SWR + 0x142C, 0x01);
+    TaWr(RX_SWR + 0x142C, 0x00);
     TaWr(RX_SWR + 0x1430 + mb, 0x00);
-    TaWr(RX_SWR + 0x1434 + mb, 0xF0);
+    TaWr(RX_SWR + 0x1434 + mb, 0x00);
 }
 
 static VOID PortsAndPa(VOID)
@@ -516,6 +518,7 @@ static NTSTATUS Fs1815InitOne(UCHAR Addr)
     /* SE1 (0x34/0x35) = 0x0A, SE2 (0x80|0x34/0x35) = 0x09 per fs1815.fsm */
     ch = (Addr & 0x80u) ? 0x0009u : 0x000Au;
     (VOID)Fs1815UpdateBits(Addr, 0x19, 0, 5, ch);
+    (VOID)Fs1815UpdateBits(Addr, 0xBC, 3, 1, 1);            /* live xun fs1815_live.txt: 0xBC = 0x142B */
     (VOID)TaI2cWrite16(Addr, 0x5A, 0xF8E0);
     st = TaI2cWrite16(Addr, 0x1F, 0x0000);                  /* lock private regs */
     return st;
@@ -726,21 +729,19 @@ NTSTATUS HwStreamRun(WDFDEVICE Device)
             g_PortsUp = TRUE;
         }
         AmpOn(TRUE);
-        ApplyVolume();
         TaWr(RX_MACRO + 0x180, 0x70);                   /* RX INT0_1 MIX1 INP1 = RX2 (AIF2_PB ch0) */
         TaWr(RX_MACRO + 0x190, 0x08);                   /* RX INT2_1 MIX1 INP0 = RX3 (AIF2_PB ch1) */
         TaWr(RX_MACRO + 0x404, 0x48);
         TaWr(RX_MACRO + 0x408, 0x67);
         TaWr(RX_MACRO + 0x40C, 0x8F);
-        TaWr(RX_MACRO + 0x414, 0x00);
-        TaWr(RX_MACRO + 0x42C, 0x14);
+        TaWr(RX_MACRO + 0x42C, 0x00);
         TaWr(RX_MACRO + 0x440, 0x09);
-        TaWr(RX_MACRO + 0x484, 0x18);
-        TaWr(RX_MACRO + 0x4C0, 0x09);
+        TaWr(RX_MACRO + 0x484, 0x00);
+        TaWr(RX_MACRO + 0x4C0, 0x08);
         TaWr(RX_MACRO + 0x504, 0x18);
         TaWr(RX_MACRO + 0x50C, 0x8F);
-        TaWr(RX_MACRO + 0x514, 0xFB);
         TaWr(RX_MACRO + 0x54C, 0x01);
+        ApplyVolume();
         TaWr(RX_MACRO + 0x418, 0x04);
         TaWr(RX_MACRO + 0x400, 0x24);                   /* RX0 path + interp clk on, unmuted (bit 4=0) */
         TaWr(RX_MACRO + 0x518, 0x04);
