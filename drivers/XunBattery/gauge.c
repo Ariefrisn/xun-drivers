@@ -29,39 +29,6 @@ static VOID TcpcDump(PDEVICE_CONTEXT Ctx, PCSTR Why)
 #define WUSB3801_REG_INT  0x03
 #define WUSB3801_REG_STAT 0x04
 
-static VOID WusbStep(PDEVICE_CONTEXT Ctx)
-{
-    UCHAR r03 = 0, r04 = 0;
-    ULONG partner;
-
-    (VOID)I2cReadByte(&Ctx->Bus, WUSB3801_ADDR, WUSB3801_REG_INT, &r03);
-    if (!NT_SUCCESS(I2cReadByte(&Ctx->Bus, WUSB3801_ADDR, WUSB3801_REG_STAT, &r04))) {
-        return;
-    }
-    partner = (r04 >> 2) & 0x07;
-    if (r04 != Ctx->WusbLastStat || r03 != 0) {
-        LogPrint("wusb3801: int=%02x stat=%02x (vbus=%u partner=%u cc=%u)\n",
-                 r03, r04, (r04 >> 7) & 1, partner, r04 & 0x03);
-        Ctx->WusbLastStat = r04;
-    }
-    if (partner == 1) {
-        if (Ctx->TcState != TC_SRC) {
-            ChgSetOtg(Ctx, TRUE, "wusb3801 hub attached");
-            TcSetState(Ctx, TC_SRC, "wusb3801 partner Snk/Rd");
-        }
-    } else if (partner == 2) {
-        if (Ctx->TcState != TC_SNK) {
-            ChgSetOtg(Ctx, FALSE, "wusb3801 charger attached");
-            TcSetState(Ctx, TC_SNK, "wusb3801 partner Src/Rp");
-        }
-    } else {
-        if (Ctx->TcState != TC_TOGGLING) {
-            ChgSetOtg(Ctx, FALSE, "wusb3801 detached");
-            TcSetState(Ctx, TC_TOGGLING, "wusb3801 detached");
-        }
-    }
-}
-
 static VOID TcpcInit(PDEVICE_CONTEXT Ctx)
 {
     USHORT vid = 0, pid = 0;
@@ -182,6 +149,39 @@ static VOID TcFallback(PDEVICE_CONTEXT Ctx, PCSTR Why)
 {
     I2cWriteByte(&Ctx->Bus, TCPC_ADDR, TCPC_REG_ROLE_CTRL, TCPC_ROLE_SINK_RD_RD);
     TcSetState(Ctx, TC_FALLBACK, Why);
+}
+
+static VOID WusbStep(PDEVICE_CONTEXT Ctx)
+{
+    UCHAR r03 = 0, r04 = 0;
+    ULONG partner;
+
+    (VOID)I2cReadByte(&Ctx->Bus, WUSB3801_ADDR, WUSB3801_REG_INT, &r03);
+    if (!NT_SUCCESS(I2cReadByte(&Ctx->Bus, WUSB3801_ADDR, WUSB3801_REG_STAT, &r04))) {
+        return;
+    }
+    partner = (r04 >> 2) & 0x07;
+    if (r04 != Ctx->WusbLastStat || r03 != 0) {
+        LogPrint("wusb3801: int=%02x stat=%02x (vbus=%u partner=%u cc=%u)\n",
+                 r03, r04, (r04 >> 7) & 1, partner, r04 & 0x03);
+        Ctx->WusbLastStat = r04;
+    }
+    if (partner == 1) {
+        if (Ctx->TcState != TC_SRC) {
+            ChgSetOtg(Ctx, TRUE, "wusb3801 hub attached");
+            TcSetState(Ctx, TC_SRC, "wusb3801 partner Snk/Rd");
+        }
+    } else if (partner == 2) {
+        if (Ctx->TcState != TC_SNK) {
+            ChgSetOtg(Ctx, FALSE, "wusb3801 charger attached");
+            TcSetState(Ctx, TC_SNK, "wusb3801 partner Src/Rp");
+        }
+    } else {
+        if (Ctx->TcState != TC_TOGGLING) {
+            ChgSetOtg(Ctx, FALSE, "wusb3801 detached");
+            TcSetState(Ctx, TC_TOGGLING, "wusb3801 detached");
+        }
+    }
 }
 
 static VOID TcStep(PDEVICE_CONTEXT Ctx)
