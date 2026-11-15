@@ -252,7 +252,6 @@ static NTSTATUS CodecBringUp(VOID)
     SwrWr(VA_SWR, 1, 0x30A4, 0x4E);                 /* ear_dac_event/enable_ear_pa POST_PMU: 0x4E (stock) */
     SwrWr(VA_SWR, 1, 0x3450, 0x01);                 /* RDAC3_MUX = RX1 */
     SwrWr(VA_SWR, 1, 0x340B, 0x55);                 /* AUX PATH Mode = HP_MODE (bit 6 = 0, stock 0x55) */
-    SwrWr(VA_SWR, 1, 0x3465, 0x13);
     SwrWr(VA_SWR, 1, 0x3009, 0x0C); SwrWr(VA_SWR, 1, 0x300A, 0x40); SwrWr(VA_SWR, 1, 0x300B, 0x12);
     SwrWr(VA_SWR, 1, 0x3008, 0x41); SwrWr(VA_SWR, 1, 0x3008, 0xC1);
     g_CodecUp = TRUE;
@@ -350,10 +349,10 @@ static VOID PortsAndPa(VOID)
     SwrWr(VA_SWR, 1, 0x3128, 0x80);                 /* AUX PGA enable (bit 7), AUX PATH Mode bit 4 = 0 matching 0x340B = 0x55 (wcd937x_aux_path_mode_put) */
     SwrWr(VA_SWR, 1, 0x3008, 0xC1);                 /* RX_CTRL_0: HPH/EAR bias on before EAR PA POST_PMU */
     SwrWr(VA_SWR, 1, 0x3009, 0x0C);                 /* WCD937X_ANA_HPH: keep HPHL/HPHR PA off (stock 0x0C) so EAR PA isn't contended */
-    SwrWr(VA_SWR, 1, 0x300B, 0x92);                 /* WCD937X_ANA_EAR: EAR_ENABLE bit 7 (0x80) MUST STAY SET while active + G_0_DB (0x12) */
+    SwrWr(VA_SWR, 1, 0x300B, 0x12);                 /* WCD937X_ANA_EAR: clear bit 7 (0x80=0) on POST_PMU + G_0_DB (0x12, stock 0x12) */
     SwrWr(VA_SWR, 1, 0x300A, 0x40);                 /* Keep bit 7 (0x80) clear while active (pulsed only on POST_PMD) */
     TaSleep(6);                                     /* wcd937x_codec_enable_ear_pa POST_PMU 6ms settle */
-    SwrWr(VA_SWR, 1, 0x3008, 0xC3);                 /* wcd937x_codec_enable_ear_pa POST_PMU sets bit 1 (0x02) of 0x3008 */
+    SwrWr(VA_SWR, 1, 0x3008, 0xC1);                 /* stock xun playback_start_trace + wcd937x.txt: 0x3008 = 0xC1 */
     /* Keep 0x3467 = 0x05 while active (stock ear_pa/aux_pa only clear it on POST_PMD) */
     SwrWr(VA_SWR, 1, 0x346B, 0x4C);
     SwrWr(VA_SWR, 1, 0x346C, 0x7F);
@@ -499,9 +498,7 @@ static NTSTATUS Fs1815InitOne(UCHAR Addr)
     ch = (Addr & 0x80u) ? 0x0009u : 0x000Au;
     (VOID)Fs1815UpdateBits(Addr, 0x19, 0, 5, ch);
     (VOID)TaI2cWrite16(Addr, 0x5A, 0xF8E0);
-    (VOID)TaI2cWrite16(Addr, 0x1F, 0x0000);                 /* lock private regs */
-    (VOID)TaI2cWrite16(Addr, 0x06, 0xFF00);                 /* 0 dB volume */
-    st = TaI2cWrite16(Addr, 0x16, 0xFF80);                  /* fs1815 volume reg 0x16 (fsm_config_vol bit 5) */
+    st = TaI2cWrite16(Addr, 0x1F, 0x0000);                  /* lock private regs */
     return st;
 }
 
@@ -577,12 +574,6 @@ static VOID AmpOn(BOOLEAN On)
             }
             (VOID)TaI2cWrite16(g_FsAddrs[k], 0x11, 0x008F);     /* Boost/PLL/Class-D enable */
             status = TaI2cWrite16(g_FsAddrs[k], 0x10, 0x0000);  /* Power UP / unmute */
-            (VOID)TaI2cWrite16(g_FsAddrs[k], 0x1F, 0xCA91);     /* unlock before vol */
-            (VOID)TaI2cWrite16(g_FsAddrs[k], 0x0B, 0xCA91);     /* fsm_access_key alt reg (flags & 0x10 == 0) */
-            (VOID)TaI2cWrite16(g_FsAddrs[k], 0x06, 0xFF00);     /* 0 dB volume */
-            (VOID)TaI2cWrite16(g_FsAddrs[k], 0x16, 0xFF80);     /* fs1815 volume reg 0x16 */
-            (VOID)TaI2cWrite16(g_FsAddrs[k], 0x0B, 0x0000);
-            (VOID)TaI2cWrite16(g_FsAddrs[k], 0x1F, 0x0000);     /* lock */
         } else {
             status = TaI2cWrite16(g_FsAddrs[k], 0x10, 0x0001);  /* Power down */
             (VOID)TaI2cWrite16(g_FsAddrs[k], 0x11, 0x0000);     /* Boost off */
