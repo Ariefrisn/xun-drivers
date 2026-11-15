@@ -281,25 +281,70 @@ static NTSTATUS CodecBringUp(VOID)
 }
 
 /* SoundWire data ports (ports.ps1) + AUX PA (wcd_auxpa.ps1): after the first graph start */
+static VOID ProgramSwrPortBank(ULONG Bank)
+{
+    ULONG mb = Bank << 6;
+    ULONG sb = Bank << 4;
+
+    /* Port 1 (HPH/EAR, rx_frame_params_default[0]: sint=3, off1=0, off2=0, hstart=0xff, hstop=0xff, wl=1, ch_en=1) */
+    SwrWr(RX_SWR, 1, 0x103, 0x01);
+    SwrWr(RX_SWR, 1, 0x120 + sb, 0x01);
+    SwrWr(RX_SWR, 1, 0x122 + sb, 0x03);
+    SwrWr(RX_SWR, 1, 0x123 + sb, 0x00);
+    SwrWr(RX_SWR, 1, 0x124 + sb, 0x00);
+    SwrWr(RX_SWR, 1, 0x125 + sb, 0x00);
+    SwrWr(RX_SWR, 1, 0x126 + sb, 0xF0);
+    TaWr(RX_SWR + 0x1124 + mb, 0x01000003);
+    TaWr(RX_SWR + 0x113C + mb, 0x00);
+    TaWr(RX_SWR + 0x112C, 0x01);
+    TaWr(RX_SWR + 0x1134 + mb, 0xF0);
+
+    /* Port 2 (CLSH, rx_frame_params_default[1]: sint=0x1f, off1=0, off2=0, hstart=3, hstop=6, wl=7, type=0, ch_en=1) */
+    SwrWr(RX_SWR, 1, 0x203, 0x07);
+    SwrWr(RX_SWR, 1, 0x220 + sb, 0x01);
+    SwrWr(RX_SWR, 1, 0x222 + sb, 0x1F);
+    SwrWr(RX_SWR, 1, 0x223 + sb, 0x00);
+    SwrWr(RX_SWR, 1, 0x224 + sb, 0x00);
+    SwrWr(RX_SWR, 1, 0x226 + sb, 0x63);
+    SwrWr(RX_SWR, 1, 0x227 + sb, 0x00);
+    TaWr(RX_SWR + 0x1224 + mb, 0x0100001F);
+    TaWr(RX_SWR + 0x123C + mb, 0x00);
+    TaWr(RX_SWR + 0x122C, 0x07);
+    TaWr(RX_SWR + 0x1230 + mb, 0x00);
+    TaWr(RX_SWR + 0x1234 + mb, 0x63);
+
+    /* Port 4 (LO/AUX, rx_frame_params_default[3]: sint=7, off1=1, off2=0, hstart=0xff, hstop=0xff, wl=0xff, ch_en=1) */
+    SwrWr(RX_SWR, 1, 0x420 + sb, 0x01);
+    SwrWr(RX_SWR, 1, 0x422 + sb, 0x07);
+    SwrWr(RX_SWR, 1, 0x423 + sb, 0x00);
+    SwrWr(RX_SWR, 1, 0x424 + sb, 0x01);
+    SwrWr(RX_SWR, 1, 0x426 + sb, 0xF0);
+    TaWr(RX_SWR + 0x1424 + mb, 0x01000107);
+    TaWr(RX_SWR + 0x143C + mb, 0x00);
+    TaWr(RX_SWR + 0x1434 + mb, 0xF0);
+}
+
 static VOID PortsAndPa(VOID)
 {
-    static const ULONG slv[][2] = {
-        { 0x103, 3 }, { 0x130, 3 }, { 0x132, 7 }, { 0x133, 0 }, { 0x134, 3 },   /* Port 1: HPHL+HPHR/EAR */
-        { 0x203, 7 }, { 0x230, 1 }, { 0x232, 0x1F }, { 0x233, 0 }, { 0x234, 0 }, { 0x236, 0x36 }, /* Port 2: CLSH */
-        { 0x403, 1 }, { 0x430, 1 }, { 0x432, 7 }, { 0x433, 0 }, { 0x434, 1 }    /* Port 4: LO/AUX (p9_stock: 403=1, 142C=7) */
-    };
-    ULONG i;
+    ULONG mcpPre, curBank, nextBank, mcpPost;
 
-    /* Bank 1 on Master + Slave, then broadcast bank switch */
-    TaWr(RX_SWR + 0x1164, 0x01000307); TaWr(RX_SWR + 0x117C, 0); TaWr(RX_SWR + 0x112C, 7); TaWr(RX_SWR + 0x1174, 0);
-    TaWr(RX_SWR + 0x1264, 0x0100001F); TaWr(RX_SWR + 0x127C, 0); TaWr(RX_SWR + 0x122C, 7); TaWr(RX_SWR + 0x1274, 0x63);
-    TaWr(RX_SWR + 0x1464, 0x01000107); TaWr(RX_SWR + 0x147C, 0); TaWr(RX_SWR + 0x142C, 7); TaWr(RX_SWR + 0x1474, 0);
-    for (i = 0; i < ARRAYSIZE(slv); i++) {
-        SwrWr(RX_SWR, 1, slv[i][0], slv[i][1]);
-    }
-    TaWr(RX_SWR + 0x105C, 0x5000F);
-    TaWr(RX_SWR + 0x300, (0x0Fu << 24) | (15u << 20) | (15u << 16) | 0x70);   /* broadcast bank switch */
+    /* swrm_slvdev_datapath_control (swr_ctrl_dlkm.ko 0x48a0..0x4b40):
+       1. Enable port interrupt mask at 0x0A50 ((5 * 33) << 4)
+       2. Read SWRM_MCP_STATUS (0x104C) bit 0 = curBank, nextBank = curBank ^ 1
+       3. Program Slave + Master ports in nextBank (inactive bank)
+       4. Write SWRM_MCP_FRAME_CTRL_BANK(nextBank) = 0x0005000F
+       5. Broadcast SCP_FrameCtrl (dev=0x0F, cmd_id=0x0F, reg=0x0060+(nextBank<<4), data=0x0F)
+       6. Mirror Slave + Master ports in curBank (now-inactive bank) */
+    TaWr(RX_SWR + 0x0A50, 0x0001FDFD);
+    mcpPre = TaRd(RX_SWR + 0x104C);
+    curBank = mcpPre & 1u;
+    nextBank = curBank ^ 1u;
+    ProgramSwrPortBank(nextBank);
+    TaWr(RX_SWR + 0x101C + (nextBank << 6), 0x0005000F);
+    TaWr(RX_SWR + 0x0300, (0x0Fu << 24) | (15u << 20) | (15u << 16) | (0x0060u + (nextBank << 4)));
     TaSleep(5);
+    ProgramSwrPortBank(curBank);
+    mcpPost = TaRd(RX_SWR + 0x104C);
     SwrWr(VA_SWR, 1, 0x30A4, 0x4E);                 /* EAR DAC/PA active (stock 0x4E) */
     SwrWr(VA_SWR, 1, 0x3467, 0x05);
     SwrWr(VA_SWR, 1, 0x3128, 0x80);                 /* AUX PGA enable (bit 7), AUX PATH Mode bit 4 = 0 matching 0x340B = 0x55 (wcd937x_aux_path_mode_put) */
@@ -313,7 +358,8 @@ static VOID PortsAndPa(VOID)
     SwrWr(VA_SWR, 1, 0x346B, 0x4C);
     SwrWr(VA_SWR, 1, 0x346C, 0x7F);
     SwrWr(VA_SWR, 1, 0x346D, 0x0F);
-    LogPrint("ports: rx frame b1 %08x, irq %08x\r\n", TaRd(RX_SWR + 0x105C), TaRd(RX_SWR + 0x200));
+    LogPrint("ports: mcp %08x->%08x (bank %u->%u) frame b0=%08x b1=%08x, irq %08x\r\n",
+             mcpPre, mcpPost, curBank, nextBank, TaRd(RX_SWR + 0x101C), TaRd(RX_SWR + 0x105C), TaRd(RX_SWR + 0x200));
     LogPrint("wcd[3008..300B,30A4,3128,3133]: %02x %02x %02x %02x %02x %02x %02x\r\n",
              SwrRd(VA_SWR, 1, 0x3008), SwrRd(VA_SWR, 1, 0x3009),
              SwrRd(VA_SWR, 1, 0x300A), SwrRd(VA_SWR, 1, 0x300B),
@@ -322,14 +368,14 @@ static VOID PortsAndPa(VOID)
              SwrRd(VA_SWR, 1, 0x3408), SwrRd(VA_SWR, 1, 0x3409), SwrRd(VA_SWR, 1, 0x340B),
              SwrRd(VA_SWR, 1, 0x344E), SwrRd(VA_SWR, 1, 0x344F), SwrRd(VA_SWR, 1, 0x3450),
              SwrRd(VA_SWR, 1, 0x3467), SwrRd(VA_SWR, 1, 0x346B), SwrRd(VA_SWR, 1, 0x346C), SwrRd(VA_SWR, 1, 0x346D));
-    LogPrint("rx_slv p1[103,130..134]=%02x/%02x,%02x,%02x,%02x p2[203,230..236]=%02x/%02x,%02x,%02x,%02x,%02x p4[403,430..434]=%02x/%02x,%02x,%02x,%02x\r\n",
-             SwrRd(RX_SWR, 1, 0x103), SwrRd(RX_SWR, 1, 0x130), SwrRd(RX_SWR, 1, 0x132), SwrRd(RX_SWR, 1, 0x133), SwrRd(RX_SWR, 1, 0x134),
+    LogPrint("rx_slv p1[103,130..136]=%02x/%02x,%02x,%02x,%02x,%02x p2[203,230..236]=%02x/%02x,%02x,%02x,%02x,%02x p4[403,430..436]=%02x/%02x,%02x,%02x,%02x,%02x\r\n",
+             SwrRd(RX_SWR, 1, 0x103), SwrRd(RX_SWR, 1, 0x130), SwrRd(RX_SWR, 1, 0x132), SwrRd(RX_SWR, 1, 0x133), SwrRd(RX_SWR, 1, 0x134), SwrRd(RX_SWR, 1, 0x136),
              SwrRd(RX_SWR, 1, 0x203), SwrRd(RX_SWR, 1, 0x230), SwrRd(RX_SWR, 1, 0x232), SwrRd(RX_SWR, 1, 0x233), SwrRd(RX_SWR, 1, 0x234), SwrRd(RX_SWR, 1, 0x236),
-             SwrRd(RX_SWR, 1, 0x403), SwrRd(RX_SWR, 1, 0x430), SwrRd(RX_SWR, 1, 0x432), SwrRd(RX_SWR, 1, 0x433), SwrRd(RX_SWR, 1, 0x434));
-    LogPrint("rx_mst p1=%08x/%02x p2=%08x/%02x p4=%08x/%02x\r\n",
-             TaRd(RX_SWR + 0x1164), TaRd(RX_SWR + 0x112C),
-             TaRd(RX_SWR + 0x1264), TaRd(RX_SWR + 0x122C),
-             TaRd(RX_SWR + 0x1464), TaRd(RX_SWR + 0x142C));
+             SwrRd(RX_SWR, 1, 0x403), SwrRd(RX_SWR, 1, 0x430), SwrRd(RX_SWR, 1, 0x432), SwrRd(RX_SWR, 1, 0x433), SwrRd(RX_SWR, 1, 0x434), SwrRd(RX_SWR, 1, 0x436));
+    LogPrint("rx_mst p1=%08x/%02x/%02x p2=%08x/%02x/%02x p4=%08x/%02x/%02x\r\n",
+             TaRd(RX_SWR + 0x1164), TaRd(RX_SWR + 0x112C), TaRd(RX_SWR + 0x1174),
+             TaRd(RX_SWR + 0x1264), TaRd(RX_SWR + 0x122C), TaRd(RX_SWR + 0x1274),
+             TaRd(RX_SWR + 0x1464), TaRd(RX_SWR + 0x142C), TaRd(RX_SWR + 0x1474));
     LogPrint("rx_b0 frame=%08x slv=%08x scp50=%02x en0=%02x/%02x/%02x wcd[3001,30A5,3465]=%02x/%02x/%02x\r\n",
              TaRd(RX_SWR + 0x101C), TaRd(RX_SWR + 0x1090), SwrRd(RX_SWR, 1, 0x0050),
              SwrRd(RX_SWR, 1, 0x120), SwrRd(RX_SWR, 1, 0x220), SwrRd(RX_SWR, 1, 0x420),
