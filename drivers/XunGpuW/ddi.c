@@ -296,11 +296,9 @@ static VOID TgDpcRoutine(const PVOID Ctx)
 
 static NTSTATUS TgSetPowerState(const PVOID Ctx, ULONG Uid, DEVICE_POWER_STATE Ps, POWER_ACTION Action)
 {
-    LogPrint("%s\n", "TgSetPowerState");
+    LogPrint("TgSetPowerState uid=%u ps=%u action=%u\n", Uid, (ULONG)Ps, (ULONG)Action);
     UNREFERENCED_PARAMETER(Ctx);
-    UNREFERENCED_PARAMETER(Uid);
-    UNREFERENCED_PARAMETER(Ps);
-    UNREFERENCED_PARAMETER(Action);
+    DispSetPanelPower(Ps == PowerDeviceD0);
     return STATUS_SUCCESS;
 }
 

@@ -1584,6 +1584,11 @@ static VOID BlPanel(BOOLEAN On)
     LogPrint("panel %s (backlight %u%%): %s\n", On ? "on" : "off", g_Brightness, done ? "done" : "NO DONE");
 }
 
+VOID DispSetPanelPower(BOOLEAN On)
+{
+    BlPanel(On);
+}
+
 static NTSTATUS APIENTRY BlGet(HANDLE Ctx, UCHAR *Pct)
 {
     UNREFERENCED_PARAMETER(Ctx);

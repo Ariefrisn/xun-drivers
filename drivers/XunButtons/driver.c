@@ -76,6 +76,8 @@ typedef struct _DEVICE_CONTEXT {
   UCHAR LastRt;
   UCHAR PwrDebounce;
   BOOLEAN PwrReported;
+  ULONG PwrHoldTicks;
+  BOOLEAN PwrLongSent;
 } DEVICE_CONTEXT, *PDEVICE_CONTEXT;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DEVICE_CONTEXT, DeviceGetContext)
@@ -107,6 +109,21 @@ static const UCHAR g_ReportDescriptor[] = {
     0x02, 0x09, 0xE9, /*   Volume Increment */
     0x09, 0xEA,       /*   Volume Decrement */
     0x81, 0x02, 0x95, 0x06, 0x81, 0x03, 0xC0,
+    0x05, 0x01,       /* Usage Page (Generic Desktop) */
+    0x09, 0x06,       /* Usage (Keyboard) */
+    0xA1, 0x01,       /* Collection (Application) */
+    0x85, 0x03,       /*   Report ID 3 */
+    0x05, 0x07,       /*   Usage Page (Keyboard/Keypad) */
+    0x19, 0xE0, 0x29, 0xE7, /* Modifiers */
+    0x15, 0x00, 0x25, 0x01,
+    0x75, 0x01, 0x95, 0x08,
+    0x81, 0x02,       /*   Input (Data,Var,Abs) */
+    0x95, 0x01, 0x75, 0x08, 0x81, 0x01, /* Reserved byte */
+    0x19, 0x00, 0x29, 0xE7, /* Key array (1 key) */
+    0x15, 0x00, 0x26, 0xE7, 0x00,
+    0x75, 0x08, 0x95, 0x01,
+    0x81, 0x00,       /*   Input (Data,Array) */
+    0xC0,
 };
 
 /* ---- SPMI (read only) ------------------------------------------------------
@@ -292,6 +309,19 @@ static VOID SendReport(PDEVICE_CONTEXT Ctx, UCHAR Id, UCHAR Bits) {
   VhfReadReportSubmit(Ctx->Vhf, &pkt);
 }
 
+static VOID SendKeyReport(PDEVICE_CONTEXT Ctx, UCHAR Mod, UCHAR Key) {
+  UCHAR buf[4] = {3, Mod, 0, Key};
+  HID_XFER_PACKET pkt;
+
+  if (Ctx->Vhf == NULL) {
+    return;
+  }
+  pkt.reportBuffer = buf;
+  pkt.reportBufferLen = sizeof(buf);
+  pkt.reportId = 3;
+  VhfReadReportSubmit(Ctx->Vhf, &pkt);
+}
+
 static KSTART_ROUTINE PollThread;
 
 static VOID PollThread(PVOID Context) {
@@ -359,12 +389,37 @@ static VOID PollThread(PVOID Context) {
         ctx->PwrReported = pwrRpt ? TRUE : FALSE;
         ctx->PwrDebounce = 0;
         if (!PwrOffExists()) {
-          LogPrint("keys: power=%u\n", pwrRpt);
-          SendReport(ctx, 1, pwrRpt);
+          if (ctx->PwrReported) {
+            ctx->PwrHoldTicks = 0;
+            ctx->PwrLongSent = FALSE;
+            LogPrint("keys: power=1 (press)\n");
+          } else {
+            LogPrint("keys: power=0 (release, ticks=%u)\n", ctx->PwrHoldTicks);
+            if (!ctx->PwrLongSent) {
+              LARGE_INTEGER d;
+              LogPrint("keys: short press -> Win+L (Lock)\n");
+              SendKeyReport(ctx, 0x08, 0x0F); /* Left GUI + L */
+              d.QuadPart = -500000LL;         /* 50 ms */
+              KeDelayExecutionThread(KernelMode, FALSE, &d);
+              SendKeyReport(ctx, 0x00, 0x00);
+            }
+          }
         }
       }
     } else {
       ctx->PwrDebounce = 0;
+      if (ctx->PwrReported && !PwrOffExists()) {
+        ctx->PwrHoldTicks++;
+        if (ctx->PwrHoldTicks == 50 && !ctx->PwrLongSent) { /* ~1.5s hold */
+          LARGE_INTEGER d;
+          ctx->PwrLongSent = TRUE;
+          LogPrint("keys: long press -> System Power Down\n");
+          SendReport(ctx, 1, 1);
+          d.QuadPart = -500000LL;
+          KeDelayExecutionThread(KernelMode, FALSE, &d);
+          SendReport(ctx, 1, 0);
+        }
+      }
     }
     if (hallClosed != ctx->LastHallClosed) {
       LogPrint("hall: lid=%s\n", hallClosed ? "closed" : "open");
