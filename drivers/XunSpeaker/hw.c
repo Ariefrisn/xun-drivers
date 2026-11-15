@@ -207,6 +207,7 @@ static NTSTATUS CodecBringUp(VOID)
     TaWr(RX_MACRO + 0x100, 0x03);                    /* keep MCLK_CONTROL enabled (g_RxStock had 0x00) */
     TaWr(RX_MACRO + 0x104, 0x01);                    /* FS_CNT_CONTROL enabled */
     TaWr(RX_MACRO + 0x108, 0x01);                    /* SWR_CONTROL enabled */
+    TaWr(RX_MACRO + 0x08C, 0x00);                    /* live xun bolero.txt (0x00) */
     TaWr(RX_MACRO + 0x180, 0x70);                    /* RX INT0_1 MIX1 INP1 = RX2 (AIF2_PB ch0) */
     TaWr(RX_MACRO + 0x188, 0x07);                    /* RX INT1_1 MIX1 INP0 = RX2 (AIF2_PB ch0) */
     TaWr(RX_MACRO + 0x190, 0x08);                    /* RX INT2_1 MIX1 INP0 = RX3 (AIF2_PB ch1) */
@@ -218,6 +219,7 @@ static NTSTATUS CodecBringUp(VOID)
     TaWr(RX_MACRO + 0x404, 0x48);                    /* INT0_CFG1: live xun ftrace (0x48) */
     TaWr(RX_MACRO + 0x408, 0x67);                    /* INT0_CFG0: 0x64 | EAR_LUT_BYPASS(0x02) | CLSH_DSM_OUT(0x01) */
     TaWr(RX_MACRO + 0x40C, 0x8F);                    /* INT0_CFG2: live xun ftrace (0x8F) */
+    TaWr(RX_MACRO + 0x410, 0x03);                    /* INT0_CFG3: live xun bolero.txt (0x03) */
     TaWr(RX_MACRO + 0x414, 0x00);                    /* INT0_VOL_CTL: live xun ftrace (0x00) */
     TaWr(RX_MACRO + 0x42C, 0x14);                    /* INT0_ESM_CTL */
     TaWr(RX_MACRO + 0x440, 0x09);                    /* INT0 interp/DSM out enable (preserve bit 3 = 0x08 from g_RxStock) */
@@ -227,6 +229,7 @@ static NTSTATUS CodecBringUp(VOID)
     TaWr(RX_MACRO + 0x50C, 0x8F);                    /* INT2_CFG2: live xun ftrace (0x8F) */
     TaWr(RX_MACRO + 0x514, 0xFB);                    /* INT2_VOL_CTL: live xun ftrace (0xFB) */
     TaWr(RX_MACRO + 0x54C, 0x01);                    /* INT2 DSM_OUT_EN bit 0 */
+    TaWr(RX_MACRO + 0xA04, 0xE2);                    /* live xun bolero.txt (0xE2) */
     TaWr(RX_MACRO + 0x400, 4); TaWr(RX_MACRO + 0x480, 4); TaWr(RX_MACRO + 0x500, 4);
     {
         USHORT l14_st = 0x1EE, l14_cfg[7] = { 0 }, l9_st = 0x1EE, l9_cfg[7] = { 0 };
@@ -239,7 +242,7 @@ static NTSTATUS CodecBringUp(VOID)
                  st3, st4, l9_st, l9_cfg[0], l9_cfg[1], l9_cfg[6]);
     }
     /* 9. WCD937x init + RX clocks + AUX DAC (Left) + EAR DAC (Right) (TX slave on VA bus, dev 1) */
-    SwrWr(VA_SWR, 1, 0x3103, 0xD6); TaSleep(2);
+    SwrWr(VA_SWR, 1, 0x3103, 0xDE); TaSleep(2);
     SwrWr(VA_SWR, 1, 0x312A, 0x00);
     SwrWr(VA_SWR, 1, 0x3029, 0x85);
     SwrWr(VA_SWR, 1, 0x3001, 0xC0); TaSleep(10); SwrWr(VA_SWR, 1, 0x3001, 0x80);
@@ -250,7 +253,7 @@ static NTSTATUS CodecBringUp(VOID)
     SwrWr(VA_SWR, 1, 0x340D, 0xBC); SwrWr(VA_SWR, 1, 0x340E, 0xBC); SwrWr(VA_SWR, 1, 0x340F, 0xBC);
     SwrWr(VA_SWR, 1, 0x3408, 0x03);
     SwrWr(VA_SWR, 1, 0x3408, 0x07); SwrWr(VA_SWR, 1, 0x3409, 0x0D); SwrWr(VA_SWR, 1, 0x344F, 0x01);
-    SwrWr(VA_SWR, 1, 0x344E, 0x04); SwrWr(VA_SWR, 1, 0x3133, 0x81); SwrWr(VA_SWR, 1, 0x3414, 0x02);
+    SwrWr(VA_SWR, 1, 0x344E, 0x04); SwrWr(VA_SWR, 1, 0x3133, 0x81); SwrWr(VA_SWR, 1, 0x3414, 0x00);
     TaSleep(5);
     SwrWr(VA_SWR, 1, 0x340B, 0x15);                 /* AUX PATH Mode: live xun ftrace START (0x15) */
     SwrWr(VA_SWR, 1, 0x3128, 0x00);                 /* AUX PGA init 0x00 before enable */
