@@ -107,6 +107,30 @@ ULONG TaRd(ULONGLONG Pa)
     return m.Value[0];
 }
 
+NTSTATUS TaPmicRd(ULONG Sid, ULONG Addr, PUSHORT Out, ULONG Count)
+{
+    TAUDIO_PMIC p;
+    NTSTATUS status;
+    ULONG i;
+
+    if (Out == NULL || Count == 0 || Count > 32) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    RtlZeroMemory(&p, sizeof(p));
+    p.Sid = Sid;
+    p.Addr = Addr;
+    p.Count = Count;
+    Lock();
+    status = TaIoctl(IOCTL_TAUDIO_PMIC, &p, sizeof(p), &p, sizeof(p), NULL);
+    Unlock();
+    if (NT_SUCCESS(status)) {
+        for (i = 0; i < Count; i++) {
+            Out[i] = p.Value[i];
+        }
+    }
+    return status;
+}
+
 NTSTATUS TaI2cWrite(UCHAR Addr, UCHAR Reg, UCHAR Value)
 {
     TAUDIO_I2C t;

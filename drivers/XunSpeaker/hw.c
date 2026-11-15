@@ -207,16 +207,23 @@ static NTSTATUS CodecBringUp(VOID)
     TaWr(RX_MACRO + 0x100, 0x03);                    /* keep MCLK_CONTROL enabled (g_RxStock had 0x00) */
     TaWr(RX_MACRO + 0x104, 0x01);                    /* FS_CNT_CONTROL enabled */
     TaWr(RX_MACRO + 0x108, 0x01);                    /* SWR_CONTROL enabled */
-    TaWr(RX_MACRO + 0x074, 0x22);                    /* RX2 MUX + RX3 MUX = AIF2_PB */
-    TaWr(RX_MACRO + 0x180, 0x01);                    /* RX INT0_1 MIX1 INP0 = RX0 (AIF1_PB L) */
-    TaWr(RX_MACRO + 0x188, 0x02);                    /* RX INT1_1 MIX1 INP0 = RX1 (AIF1_PB R) */
-    TaWr(RX_MACRO + 0x190, 0x21);                    /* RX INT2_1 MIX1 INP0 = RX0, INP1 = RX1 */
+    TaWr(RX_MACRO + 0x180, 0x70);                    /* RX INT0_1 MIX1 INP1 = RX2 (AIF2_PB ch0) */
+    TaWr(RX_MACRO + 0x190, 0x08);                    /* RX INT2_1 MIX1 INP0 = RX3 (AIF2_PB ch1) */
     TaWr(RX_MACRO + 0x200, 0x01);                    /* CLSH enable (rx_macro_config_classh) */
-    TaWr(RX_MACRO + 0x404, 0x00);                    /* RX INT0 DEM MUX = NORMAL_DSM_OUT (HPHL path) */
     TaWr(RX_MACRO + 0x440, 0x09);                    /* INT0 interp clk bit 0 */
     TaWr(RX_MACRO + 0x4C0, 0x09);                    /* INT1 interp clk bit 0 */
     TaWr(RX_MACRO + 0x54C, 0x01);                    /* INT2 interp clk bit 0 */
     TaWr(RX_MACRO + 0x400, 4); TaWr(RX_MACRO + 0x480, 4); TaWr(RX_MACRO + 0x500, 4);
+    {
+        USHORT l14_st = 0x1EE, l14_cfg[7] = { 0 }, l9_st = 0x1EE, l9_cfg[7] = { 0 };
+        NTSTATUS st1 = TaPmicRd(1, 0x4D08, &l14_st, 1);
+        NTSTATUS st2 = TaPmicRd(1, 0x4D40, l14_cfg, 7);
+        NTSTATUS st3 = TaPmicRd(1, 0x4808, &l9_st, 1);
+        NTSTATUS st4 = TaPmicRd(1, 0x4840, l9_cfg, 7);
+        LogPrint("pmic l14(%08x/%08x): st=%02x v=%02x/%02x en=%02x | l9(%08x/%08x): st=%02x v=%02x/%02x en=%02x\r\n",
+                 st1, st2, l14_st, l14_cfg[0], l14_cfg[1], l14_cfg[6],
+                 st3, st4, l9_st, l9_cfg[0], l9_cfg[1], l9_cfg[6]);
+    }
     /* 9. WCD937x init + RX clocks + AUX DAC (Left) + EAR DAC (Right) (TX slave on VA bus, dev 1) */
     SwrWr(VA_SWR, 1, 0x3103, 0xD6); TaSleep(2);
     SwrWr(VA_SWR, 1, 0x312A, 0x00);
@@ -267,29 +274,19 @@ static NTSTATUS CodecBringUp(VOID)
 static VOID PortsAndPa(VOID)
 {
     static const ULONG slv[][2] = {
-        { 0x105, 1 },
-        { 0x102, 3 }, { 0x120, 3 }, { 0x122, 7 }, { 0x123, 0 }, { 0x124, 1 }, { 0x125, 3 },
         { 0x103, 3 }, { 0x130, 3 }, { 0x132, 7 }, { 0x133, 0 }, { 0x134, 3 },   /* Port 1: HPHL+HPHR/EAR */
-        { 0x205, 1 },
-        { 0x202, 7 }, { 0x220, 1 }, { 0x222, 0x1F }, { 0x223, 0 }, { 0x224, 0 }, { 0x225, 0 }, { 0x226, 0x36 }, { 0x227, 1 },
         { 0x203, 7 }, { 0x230, 1 }, { 0x232, 0x1F }, { 0x233, 0 }, { 0x234, 0 }, { 0x236, 0x36 }, /* Port 2: CLSH */
-        { 0x405, 1 },
-        { 0x402, 1 }, { 0x420, 1 }, { 0x422, 7 }, { 0x423, 0 }, { 0x424, 1 }, { 0x425, 1 },
         { 0x403, 1 }, { 0x430, 1 }, { 0x432, 7 }, { 0x433, 0 }, { 0x434, 1 }    /* Port 4: LO/AUX (1 ch!) */
     };
     ULONG i;
 
-    /* Bank 0 + Bank 1 on Master */
-    TaWr(RX_SWR + 0x1124, 0x01000307); TaWr(RX_SWR + 0x113C, 0); TaWr(RX_SWR + 0x1134, 0);
+    /* Bank 1 on Master + Slave, then broadcast bank switch */
     TaWr(RX_SWR + 0x1164, 0x01000307); TaWr(RX_SWR + 0x117C, 0); TaWr(RX_SWR + 0x112C, 7); TaWr(RX_SWR + 0x1174, 0);
-    TaWr(RX_SWR + 0x1224, 0x0100001F); TaWr(RX_SWR + 0x123C, 0); TaWr(RX_SWR + 0x1234, 0x63);
     TaWr(RX_SWR + 0x1264, 0x0100001F); TaWr(RX_SWR + 0x127C, 0); TaWr(RX_SWR + 0x122C, 7); TaWr(RX_SWR + 0x1274, 0x63);
-    TaWr(RX_SWR + 0x1424, 0x01000107); TaWr(RX_SWR + 0x143C, 0); TaWr(RX_SWR + 0x1434, 0);
     TaWr(RX_SWR + 0x1464, 0x01000107); TaWr(RX_SWR + 0x147C, 0); TaWr(RX_SWR + 0x142C, 7); TaWr(RX_SWR + 0x1474, 0);
     for (i = 0; i < ARRAYSIZE(slv); i++) {
         SwrWr(RX_SWR, 1, slv[i][0], slv[i][1]);
     }
-    TaWr(RX_SWR + 0x101C, 0x5000F);
     TaWr(RX_SWR + 0x105C, 0x5000F);
     TaWr(RX_SWR + 0x300, (0x0Fu << 24) | (15u << 20) | (15u << 16) | 0x70);   /* broadcast bank switch */
     TaSleep(5);
@@ -664,10 +661,8 @@ NTSTATUS HwStreamRun(WDFDEVICE Device)
         }
         AmpOn(TRUE);
         ApplyVolume();
-        TaWr(RX_MACRO + 0x070, 0x11);                   /* RX0/RX1 MUX = AIF1_PB */
-        TaWr(RX_MACRO + 0x180, 0x01);                   /* RX INT0_1 MIX1 INP0 = RX0 */
-        TaWr(RX_MACRO + 0x188, 0x02);                   /* RX INT1_1 MIX1 INP0 = RX1 */
-        TaWr(RX_MACRO + 0x190, 0x21);                   /* RX INT2_1 MIX1 INP0 = RX0, INP1 = RX1 */
+        TaWr(RX_MACRO + 0x180, 0x70);                   /* RX INT0_1 MIX1 INP1 = RX2 (AIF2_PB ch0) */
+        TaWr(RX_MACRO + 0x190, 0x08);                   /* RX INT2_1 MIX1 INP0 = RX3 (AIF2_PB ch1) */
         TaWr(RX_MACRO + 0x440, 0x09);
         TaWr(RX_MACRO + 0x4C0, 0x09);
         TaWr(RX_MACRO + 0x54C, 0x01);
