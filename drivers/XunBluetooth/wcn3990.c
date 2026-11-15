@@ -561,9 +561,9 @@ static BOOLEAN VerifyPostResetStability(PXUN_BT_CONTEXT Ctx)
 NTSTATUS WcnInitializeRadio(PXUN_BT_CONTEXT Ctx)
 {
     static const struct { ULONG Baud; UCHAR QcaCode; } kBaudCandidates[] = {
-        { 3200000u, QCA_BAUDRATE_3200000 },
         { 2000000u, QCA_BAUDRATE_2000000 },
         {  921600u, QCA_BAUDRATE_921600  },
+        { 3200000u, QCA_BAUDRATE_3200000 },
     };
     NTSTATUS st = STATUS_UNSUCCESSFUL;
     ULONG romHiLo;
