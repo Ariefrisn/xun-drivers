@@ -327,13 +327,17 @@ static VOID ProgramSwrPortBank(ULONG Bank)
     TaWr(RX_SWR + 0x1234 + mb, 0x63);
 
     /* Port 4 (LO/AUX, rx_frame_params_default[3]: sint=7, off1=1, off2=0, hstart=0xff, hstop=0xff, wl=0xff, ch_en=1) */
+    SwrWr(RX_SWR, 1, 0x403, 0x01);
     SwrWr(RX_SWR, 1, 0x420 + sb, 0x01);
     SwrWr(RX_SWR, 1, 0x422 + sb, 0x07);
     SwrWr(RX_SWR, 1, 0x423 + sb, 0x00);
     SwrWr(RX_SWR, 1, 0x424 + sb, 0x01);
+    SwrWr(RX_SWR, 1, 0x425 + sb, 0x00);
     SwrWr(RX_SWR, 1, 0x426 + sb, 0xF0);
     TaWr(RX_SWR + 0x1424 + mb, 0x01000107);
     TaWr(RX_SWR + 0x143C + mb, 0x00);
+    TaWr(RX_SWR + 0x142C, 0x01);
+    TaWr(RX_SWR + 0x1430 + mb, 0x00);
     TaWr(RX_SWR + 0x1434 + mb, 0xF0);
 }
 
