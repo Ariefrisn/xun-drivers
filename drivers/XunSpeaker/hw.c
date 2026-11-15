@@ -213,6 +213,9 @@ static NTSTATUS CodecBringUp(VOID)
     TaWr(RX_MACRO + 0x190, 0x07);                    /* RX INT2_1 MIX1 INP0 = RX2 */
     TaWr(RX_MACRO + 0x200, 0x01);                    /* CLSH enable (rx_macro_config_classh) */
     TaWr(RX_MACRO + 0x404, 0x00);                    /* RX INT0 DEM MUX = NORMAL_DSM_OUT (HPHL path) */
+    TaWr(RX_MACRO + 0x440, 0x09);                    /* INT0 interp clk bit 0 */
+    TaWr(RX_MACRO + 0x4C0, 0x09);                    /* INT1 interp clk bit 0 */
+    TaWr(RX_MACRO + 0x54C, 0x01);                    /* INT2 interp clk bit 0 */
     TaWr(RX_MACRO + 0x400, 4); TaWr(RX_MACRO + 0x480, 4); TaWr(RX_MACRO + 0x500, 4);
     /* 9. WCD937x init + RX clocks + AUX DAC (Left) + EAR DAC (Right) (TX slave on VA bus, dev 1) */
     SwrWr(VA_SWR, 1, 0x3103, 0xD6); TaSleep(2);
@@ -288,7 +291,7 @@ static VOID PortsAndPa(VOID)
     SwrWr(VA_SWR, 1, 0x300A, 0x40);                 /* Keep bit 7 (0x80) clear while active (pulsed only on POST_PMD) */
     TaSleep(6);                                     /* ear_pa POST_PMU 6ms settle */
     SwrWr(VA_SWR, 1, 0x300B, 0x12);                 /* WCD937X_ANA_EAR: POST_PMU clears bit 7 (stock 0x12) */
-    SwrWr(VA_SWR, 1, 0x3467, 0x00);                 /* POST_PMU clears 0x3467 bits 0,2 (stock ear_pa/aux_pa) */
+    /* Keep 0x3467 = 0x05 while active (stock ear_pa/aux_pa only clear it on POST_PMD) */
     SwrWr(VA_SWR, 1, 0x346B, 0x4C);
     SwrWr(VA_SWR, 1, 0x346C, 0x7F);
     SwrWr(VA_SWR, 1, 0x346D, 0x0F);
@@ -650,6 +653,13 @@ NTSTATUS HwStreamRun(WDFDEVICE Device)
         }
         AmpOn(TRUE);
         ApplyVolume();
+        TaWr(RX_MACRO + 0x074, 0x22);                   /* Re-apply RX2/RX3 MUX = AIF2_PB (ADSP/g_RxStock can reset 0x074 to 0x20) */
+        TaWr(RX_MACRO + 0x180, 0x70);                   /* RX INT0_1 MIX1 INP1 = RX2 */
+        TaWr(RX_MACRO + 0x188, 0x07);                   /* RX INT1_1 MIX1 INP0 = RX2 */
+        TaWr(RX_MACRO + 0x190, 0x07);                   /* RX INT2_1 MIX1 INP0 = RX2 */
+        TaWr(RX_MACRO + 0x440, 0x09);
+        TaWr(RX_MACRO + 0x4C0, 0x09);
+        TaWr(RX_MACRO + 0x54C, 0x01);
         TaWr(RX_MACRO + 0x418, 0x04);
         TaWr(RX_MACRO + 0x400, 0x24);                   /* RX0 path + interp clk on, unmuted (bit 4=0) */
         TaWr(RX_MACRO + 0x498, 0x04);
