@@ -208,8 +208,11 @@ static NTSTATUS CodecBringUp(VOID)
     TaWr(RX_MACRO + 0x104, 0x01);                    /* FS_CNT_CONTROL enabled */
     TaWr(RX_MACRO + 0x108, 0x01);                    /* SWR_CONTROL enabled */
     TaWr(RX_MACRO + 0x074, 0x22);                    /* RX2 MUX + RX3 MUX = AIF2_PB */
+    TaWr(RX_MACRO + 0x180, 0x70);                    /* RX INT0_1 MIX1 INP1 = RX2 */
+    TaWr(RX_MACRO + 0x188, 0x07);                    /* RX INT1_1 MIX1 INP0 = RX2 */
+    TaWr(RX_MACRO + 0x190, 0x07);                    /* RX INT2_1 MIX1 INP0 = RX2 */
     TaWr(RX_MACRO + 0x200, 0x01);                    /* CLSH enable (rx_macro_config_classh) */
-    TaWr(RX_MACRO + 0x404, 0x08);                    /* RX INT0 DEM MUX = CLSH_DSM_OUT (EAR path) */
+    TaWr(RX_MACRO + 0x404, 0x00);                    /* RX INT0 DEM MUX = NORMAL_DSM_OUT (HPHL path) */
     TaWr(RX_MACRO + 0x400, 4); TaWr(RX_MACRO + 0x480, 4); TaWr(RX_MACRO + 0x500, 4);
     /* 9. WCD937x init + RX clocks + AUX DAC (Left) + EAR DAC (Right) (TX slave on VA bus, dev 1) */
     SwrWr(VA_SWR, 1, 0x3103, 0xD6); TaSleep(2);
@@ -261,7 +264,7 @@ static NTSTATUS CodecBringUp(VOID)
 static VOID PortsAndPa(VOID)
 {
     static const ULONG slv[][2] = {
-        { 0x103, 7 }, { 0x130, 1 }, { 0x132, 7 }, { 0x133, 0 }, { 0x134, 3 },   /* Port 1: HPHL/EAR (ch 0xE, offset 3) */
+        { 0x103, 7 }, { 0x130, 3 }, { 0x132, 7 }, { 0x133, 0 }, { 0x134, 3 },   /* Port 1: HPHL+HPHR/EAR (ch 0x3, offset 3) */
         { 0x203, 7 }, { 0x230, 1 }, { 0x232, 0x1F }, { 0x233, 0 }, { 0x234, 0 }, { 0x236, 0x36 }, /* Port 2: CLSH */
         { 0x403, 7 }, { 0x430, 1 }, { 0x432, 7 }, { 0x433, 0 }, { 0x434, 1 }    /* Port 4: LO/AUX (ch 0x13, offset 1) */
     };
@@ -278,7 +281,7 @@ static VOID PortsAndPa(VOID)
     TaSleep(5);
     SwrWr(VA_SWR, 1, 0x30A4, 0x4E);                 /* EAR DAC/PA active (stock 0x4E) */
     SwrWr(VA_SWR, 1, 0x3467, 0x05);
-    SwrWr(VA_SWR, 1, 0x3128, 0x80);                 /* AUX PGA enable (bit 7), AUX PATH Mode = HP_MODE (bit 4 = 0) */
+    SwrWr(VA_SWR, 1, 0x3128, 0x90);                 /* AUX PGA enable (bit 7), AUX PATH Mode = HP_MODE (bit 4 = 1 matching 0x340B bit 6) */
     SwrWr(VA_SWR, 1, 0x3008, 0xC3);                 /* RX_CTRL_0: HPH + EAR class-H / bias enable */
     SwrWr(VA_SWR, 1, 0x3009, 0xCC);                 /* WCD937X_ANA_HPH: enable HPHL/HPHR PAs as well as EAR/AUX */
     SwrWr(VA_SWR, 1, 0x300B, 0x92);                 /* WCD937X_ANA_EAR: PRE_PMU bit 7 + G_0_DB */
