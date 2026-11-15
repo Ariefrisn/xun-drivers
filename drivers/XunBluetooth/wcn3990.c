@@ -243,26 +243,17 @@ static NTSTATUS ReadSocVersion(PXUN_BT_CONTEXT Ctx)
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS SwitchOperBaud(PXUN_BT_CONTEXT Ctx)
+static NTSTATUS SwitchOperBaud(PXUN_BT_CONTEXT Ctx, ULONG TargetBaud, UCHAR TargetCode)
 {
-    /* Test 115200 baseline (no baud switch) to isolate 350ms post-reset chip reset */
-    static const struct { ULONG Baud; UCHAR QcaCode; } kCandidates[] = {
-        { 115200u,  QCA_BAUDRATE_115200  },
-    };
-    ULONG i;
-    ULONG chosenBaud = 115200u;
-    UCHAR chosenCode = QCA_BAUDRATE_115200;
+    ULONG chosenBaud = TargetBaud;
+    UCHAR chosenCode = TargetCode;
     NTSTATUS st = STATUS_SUCCESS;
 
-    /* Probe which baud rate can be clocked accurately first (before asking chip to switch!) */
-    for (i = 0; i < ARRAYSIZE(kCandidates); i++) {
-        /* Test clock availability without switching yet */
-        chosenBaud = kCandidates[i].Baud;
-        chosenCode = kCandidates[i].QcaCode;
-        st = UartSetBaud(Ctx, chosenBaud);
-        if (NT_SUCCESS(st)) {
-            break;
-        }
+    /* Probe if target baud rate can be clocked accurately first (before asking chip to switch!) */
+    st = UartSetBaud(Ctx, chosenBaud);
+    if (!NT_SUCCESS(st)) {
+        LogPrint("wcn: target baud %u unsupported (%08x)\n", chosenBaud, st);
+        return st;
     }
     /* Restore 115200 momentarily to send SET_BAUDRATE command cleanly */
     if (chosenBaud != 115200u) {
@@ -507,15 +498,81 @@ static VOID SendHciResetBestEffort(PXUN_BT_CONTEXT Ctx)
     }
 }
 
+static BOOLEAN VerifyPostResetStability(PXUN_BT_CONTEXT Ctx)
+{
+    static const UCHAR cmdVer[4] = { HCI_PKT_CMD, 0x01, 0x10, 0x00 };
+    ULONG step;
+    UCHAR pktType = 0;
+    UCHAR evt[64];
+    ULONG evtLen = 0;
+    NTSTATUS st;
+
+    for (step = 0; step < 10 && !Ctx->StopRequested; step++) {
+        UCHAR junk[64];
+        ULONG jlen;
+        ULONG sirq;
+        SleepMs(50);
+        jlen = UartReadPoll(Ctx, junk, sizeof(junk));
+        if (jlen > 0) {
+            LogHexDump("wcn: post-reset unsolicited rx", junk, jlen);
+        }
+        sirq = MmioRead32(&Ctx->Se, SE_GENI_S_IRQ_STATUS);
+        if (sirq & 0x08001000u) {
+            LogPrint("wcn: post-reset RX_BREAK at %ums (baud=%u, s_irq=%08x)\n",
+                     (step + 1) * 50u, Ctx->CurrentBaud, sirq);
+            MmioWrite32(&Ctx->Se, SE_GENI_S_IRQ_CLEAR, sirq);
+        }
+    }
+    if (Ctx->StopRequested) {
+        return FALSE;
+    }
+
+    UartFlushRx(Ctx);
+    st = UartWriteSync(Ctx, cmdVer, sizeof(cmdVer), 200);
+    if (NT_SUCCESS(st)) {
+        st = ReadH4PacketSync(Ctx, &pktType, evt, sizeof(evt), &evtLen, 300);
+    }
+    if (NT_SUCCESS(st) && pktType == HCI_PKT_EVENT && evtLen >= 6 && evt[5] == 0x00) {
+        LogHexDump("wcn: post-reset ReadLocalVer OK", evt, evtLen);
+        LogPrint("wcn: post-reset stability OK at %u baud\n", Ctx->CurrentBaud);
+        return TRUE;
+    }
+
+    LogPrint("wcn: post-reset ReadLocalVer FAILED at %u baud (%08x)\n", Ctx->CurrentBaud, st);
+    if (Ctx->CurrentBaud != 115200u && NT_SUCCESS(UartSetBaud(Ctx, 115200u))) {
+        UartFlushRx(Ctx);
+        st = ReadSocVersion(Ctx);
+        LogPrint("wcn: post-reset 115200 ReadSocVersion -> %08x (PatchVer=%04x)\n",
+                 st, Ctx->SocVer.PatchVer);
+        UartFlushRx(Ctx);
+        if (NT_SUCCESS(UartWriteSync(Ctx, cmdVer, sizeof(cmdVer), 200))) {
+            evtLen = 0;
+            st = ReadH4PacketSync(Ctx, &pktType, evt, sizeof(evt), &evtLen, 300);
+            if (NT_SUCCESS(st)) {
+                LogHexDump("wcn: post-reset 115200 ReadLocalVer", evt, evtLen);
+            } else {
+                LogPrint("wcn: post-reset 115200 ReadLocalVer -> %08x\n", st);
+            }
+        }
+    }
+    return FALSE;
+}
+
 NTSTATUS WcnInitializeRadio(PXUN_BT_CONTEXT Ctx)
 {
-    NTSTATUS st;
+    static const struct { ULONG Baud; UCHAR QcaCode; } kBaudCandidates[] = {
+        { 3200000u, QCA_BAUDRATE_3200000 },
+        { 2000000u, QCA_BAUDRATE_2000000 },
+        {  921600u, QCA_BAUDRATE_921600  },
+    };
+    NTSTATUS st = STATUS_UNSUCCESSFUL;
     ULONG romHiLo;
     WCHAR tlvName[64];
     WCHAR nvmName[64];
     PUCHAR fwBuf = NULL;
     ULONG fwSize = 0;
     ULONG attempt;
+    ULONG bIdx;
 
     /* Give XunRpm a moment if it is starting concurrently on boot */
     for (attempt = 0; attempt < 5 && !Ctx->StopRequested; attempt++) {
@@ -525,113 +582,132 @@ NTSTATUS WcnInitializeRadio(PXUN_BT_CONTEXT Ctx)
         return STATUS_CANCELLED;
     }
 
-    for (attempt = 0; attempt < 10; attempt++) {
-        if (Ctx->StopRequested) {
-            return STATUS_CANCELLED;
-        }
-        /* Clean reset pulse at 2400 baud, then power-on pulse at 115200 baud */
-        st = UartSetBaud(Ctx, 2400);
-        if (!NT_SUCCESS(st)) {
-            LogPrint("wcn: 2400 baud unavailable (%08x), skipping OFF pulse\n", st);
-        } else {
-            (VOID)SendPowerPulse(Ctx, FALSE);
-        }
+    for (bIdx = 0; bIdx < ARRAYSIZE(kBaudCandidates); bIdx++) {
+        ULONG maxAttempts = (bIdx == 0) ? 10u : 2u;
+        LogPrint("wcn: === trying baud candidate %u/%u: %u ===\n",
+                 bIdx + 1, (ULONG)ARRAYSIZE(kBaudCandidates), kBaudCandidates[bIdx].Baud);
 
-        st = UartSetBaud(Ctx, 115200);
+        for (attempt = 0; attempt < maxAttempts; attempt++) {
+            if (Ctx->StopRequested) {
+                return STATUS_CANCELLED;
+            }
+            /* Clean reset pulse at 2400 baud, then power-on pulse at 115200 baud */
+            st = UartSetBaud(Ctx, 2400);
+            if (!NT_SUCCESS(st)) {
+                LogPrint("wcn: 2400 baud unavailable (%08x), skipping OFF pulse\n", st);
+            } else {
+                (VOID)SendPowerPulse(Ctx, FALSE);
+            }
+
+            st = UartSetBaud(Ctx, 115200);
+            if (!NT_SUCCESS(st)) {
+                return st;
+            }
+            st = SendPowerPulse(Ctx, TRUE);
+            if (!NT_SUCCESS(st)) {
+                return st;
+            }
+
+            st = ReadSocVersion(Ctx);
+            if (NT_SUCCESS(st)) {
+                break;
+            }
+            if (attempt + 1 < maxAttempts) {
+                LARGE_INTEGER to;
+                to.QuadPart = -15000000LL; /* 1.5 s, interruptible on StopEvent */
+                LogPrint("wcn: EDL version attempt %d failed (%08x), waiting for LDO rails and retrying\n",
+                         attempt + 1, st);
+                KeWaitForSingleObject(&Ctx->StopEvent, Executive, KernelMode, FALSE, &to);
+            }
+        }
         if (!NT_SUCCESS(st)) {
             return st;
         }
-        st = SendPowerPulse(Ctx, TRUE);
+
+        st = SwitchOperBaud(Ctx, kBaudCandidates[bIdx].Baud, kBaudCandidates[bIdx].QcaCode);
         if (!NT_SUCCESS(st)) {
-            return st;
+            continue;
         }
 
+        /* Re-read SoC version at operating baud just like Linux hci_qca / btqca */
         st = ReadSocVersion(Ctx);
-        if (NT_SUCCESS(st)) {
+        if (!NT_SUCCESS(st)) {
+            LogPrint("wcn: post-baud ver read failed (%08x), proceeding anyway\n", st);
+        }
+
+        romHiLo = (((ULONG)Ctx->SocVer.RomVer & 0x0F00u) >> 4) | ((ULONG)Ctx->SocVer.RomVer & 0x000Fu);
+        if (Ctx->IsWcn3950) {
+            PCWSTR suffix = L"";
+            if (Ctx->SocVer.SocId == QCA_WCN3950_SOC_ID_T) suffix = L"T";
+            else if (Ctx->SocVer.SocId == QCA_WCN3950_SOC_ID_S) suffix = L"S";
+            RtlStringCbPrintfW(tlvName, sizeof(tlvName), L"CMBTFW%02X.TLV", romHiLo);
+            RtlStringCbPrintfW(nvmName, sizeof(nvmName), L"CMNV%02X%s.BIN", romHiLo, suffix);
+        } else {
+            RtlStringCbPrintfW(tlvName, sizeof(tlvName), L"CRBTFW%02X.TLV", romHiLo);
+            RtlStringCbPrintfW(nvmName, sizeof(nvmName), L"CRNV%02X.BIN", romHiLo);
+        }
+        LogPrint("wcn: firmware target tlv=%S nvm=%S\n", tlvName, nvmName);
+
+        st = ReadFirmwareFile(tlvName, &fwBuf, &fwSize);
+        if (!NT_SUCCESS(st) && !Ctx->IsWcn3950) {
+            RtlStringCbPrintfW(tlvName, sizeof(tlvName), L"APBTFW%02X.TLV", romHiLo);
+            RtlStringCbPrintfW(nvmName, sizeof(nvmName), L"APNV%02X.BIN", romHiLo);
+            st = ReadFirmwareFile(tlvName, &fwBuf, &fwSize);
+        }
+        if (!NT_SUCCESS(st)) {
+            return st;
+        }
+        st = DownloadPatchTlv(Ctx, fwBuf, fwSize);
+        ExFreePoolWithTag(fwBuf, XUN_BT_POOL_TAG);
+        fwBuf = NULL;
+        if (!NT_SUCCESS(st)) {
+            LogPrint("wcn: TLV download failed at %u (%08x), trying next baud\n",
+                     kBaudCandidates[bIdx].Baud, st);
+            continue;
+        }
+
+        st = ReadFirmwareFile(nvmName, &fwBuf, &fwSize);
+        if (!NT_SUCCESS(st)) {
+            return st;
+        }
+        st = PatchAndDownloadNvm(Ctx, fwBuf, fwSize);
+        ExFreePoolWithTag(fwBuf, XUN_BT_POOL_TAG);
+        fwBuf = NULL;
+        if (!NT_SUCCESS(st)) {
+            LogPrint("wcn: NVM download failed at %u (%08x), trying next baud\n",
+                     kBaudCandidates[bIdx].Baud, st);
+            continue;
+        }
+
+        if (Ctx->IsWcn3950) {
+            static const UCHAR disLog[6] = { HCI_PKT_CMD, 0x17, 0xFC, 0x02, EDL_DISABLE_LOG_SUB_OP, 0x00 };
+            UCHAR rsp[32];
+            ULONG rlen = 0;
+            (VOID)UartWriteSync(Ctx, disLog, sizeof(disLog), 200);
+            SleepMs(20);
+            rlen = UartReadPoll(Ctx, rsp, sizeof(rsp));
+            if (rlen > 0) {
+                LogHexDump("wcn: disLog rsp", rsp, rlen);
+            } else {
+                LogPrint("wcn: disLog no rsp\n");
+            }
+            UartFlushRx(Ctx);
+        }
+
+        SendHciResetBestEffort(Ctx);
+        LogPrint("wcn: post-reset ios=%08x sw_ctrl=%u\n",
+                 MmioRead32(&Ctx->Se, SE_GENI_IOS),
+                 MmioRead32(&Ctx->TlmmSwCtrl, TLMM_IO) & 1u);
+
+        if (VerifyPostResetStability(Ctx)) {
             break;
         }
-        if (attempt < 9) {
-            LARGE_INTEGER to;
-            to.QuadPart = -15000000LL; /* 1.5 s, interruptible on StopEvent */
-            LogPrint("wcn: EDL version attempt %d failed (%08x), waiting for LDO rails and retrying\n",
-                     attempt + 1, st);
-            KeWaitForSingleObject(&Ctx->StopEvent, Executive, KernelMode, FALSE, &to);
+        if (bIdx + 1 < ARRAYSIZE(kBaudCandidates)) {
+            LogPrint("wcn: baud %u unstable post-reset, retrying next baud...\n",
+                     kBaudCandidates[bIdx].Baud);
         }
     }
-    if (!NT_SUCCESS(st)) {
-        return st;
-    }
 
-    st = SwitchOperBaud(Ctx);
-    if (!NT_SUCCESS(st)) {
-        return st;
-    }
-
-    /* Re-read SoC version at operating baud just like Linux hci_qca / btqca */
-    st = ReadSocVersion(Ctx);
-    if (!NT_SUCCESS(st)) {
-        LogPrint("wcn: post-baud ver read failed (%08x), proceeding anyway\n", st);
-    }
-
-    romHiLo = (((ULONG)Ctx->SocVer.RomVer & 0x0F00u) >> 4) | ((ULONG)Ctx->SocVer.RomVer & 0x000Fu);
-    if (Ctx->IsWcn3950) {
-        PCWSTR suffix = L"";
-        if (Ctx->SocVer.SocId == QCA_WCN3950_SOC_ID_T) suffix = L"T";
-        else if (Ctx->SocVer.SocId == QCA_WCN3950_SOC_ID_S) suffix = L"S";
-        RtlStringCbPrintfW(tlvName, sizeof(tlvName), L"CMBTFW%02X.TLV", romHiLo);
-        RtlStringCbPrintfW(nvmName, sizeof(nvmName), L"CMNV%02X%s.BIN", romHiLo, suffix);
-    } else {
-        RtlStringCbPrintfW(tlvName, sizeof(tlvName), L"CRBTFW%02X.TLV", romHiLo);
-        RtlStringCbPrintfW(nvmName, sizeof(nvmName), L"CRNV%02X.BIN", romHiLo);
-    }
-    LogPrint("wcn: firmware target tlv=%S nvm=%S\n", tlvName, nvmName);
-
-    st = ReadFirmwareFile(tlvName, &fwBuf, &fwSize);
-    if (!NT_SUCCESS(st) && !Ctx->IsWcn3950) {
-        RtlStringCbPrintfW(tlvName, sizeof(tlvName), L"APBTFW%02X.TLV", romHiLo);
-        RtlStringCbPrintfW(nvmName, sizeof(nvmName), L"APNV%02X.BIN", romHiLo);
-        st = ReadFirmwareFile(tlvName, &fwBuf, &fwSize);
-    }
-    if (!NT_SUCCESS(st)) {
-        return st;
-    }
-    st = DownloadPatchTlv(Ctx, fwBuf, fwSize);
-    ExFreePoolWithTag(fwBuf, XUN_BT_POOL_TAG);
-    fwBuf = NULL;
-    if (!NT_SUCCESS(st)) {
-        return st;
-    }
-
-    st = ReadFirmwareFile(nvmName, &fwBuf, &fwSize);
-    if (!NT_SUCCESS(st)) {
-        return st;
-    }
-    st = PatchAndDownloadNvm(Ctx, fwBuf, fwSize);
-    ExFreePoolWithTag(fwBuf, XUN_BT_POOL_TAG);
-    fwBuf = NULL;
-    if (!NT_SUCCESS(st)) {
-        return st;
-    }
-
-    if (Ctx->IsWcn3950) {
-        static const UCHAR disLog[6] = { HCI_PKT_CMD, 0x17, 0xFC, 0x02, EDL_DISABLE_LOG_SUB_OP, 0x00 };
-        UCHAR rsp[32];
-        ULONG rlen = 0;
-        (VOID)UartWriteSync(Ctx, disLog, sizeof(disLog), 200);
-        SleepMs(20);
-        rlen = UartReadPoll(Ctx, rsp, sizeof(rsp));
-        if (rlen > 0) {
-            LogHexDump("wcn: disLog rsp", rsp, rlen);
-        } else {
-            LogPrint("wcn: disLog no rsp\n");
-        }
-        UartFlushRx(Ctx);
-    }
-
-    SendHciResetBestEffort(Ctx);
-    LogPrint("wcn: post-reset ios=%08x sw_ctrl=%u\n",
-             MmioRead32(&Ctx->Se, SE_GENI_IOS),
-             MmioRead32(&Ctx->TlmmSwCtrl, TLMM_IO) & 1u);
     Ctx->TxAwake = TRUE;
     Ctx->LastTxActivityMs = GetTicksMs();
     return STATUS_SUCCESS;
