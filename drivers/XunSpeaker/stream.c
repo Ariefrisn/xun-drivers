@@ -38,6 +38,8 @@ typedef struct {
     ULONG          PacketsDone;      /* completed packets (monotonic) */
     ULONG          RunBase;          /* PacketsDone at the last Run */
     ULONGLONG      RunConsumed;      /* bytes the DSP consumed since the last Run */
+    ULONG          StreamNz;         /* non-zero PCM samples seen during Run */
+    LONG           StreamPeak;       /* peak |PCM| seen during Run */
 } SPK_STREAM_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(SPK_STREAM_CONTEXT, SpkGetStream)
 
@@ -78,6 +80,16 @@ static VOID CopyPacket(SPK_STREAM_CONTEXT *s, ULONG b)
     ULONG slot = (pk - s->RunBase + SPK_LEAD) % SPK_SLOTS;
 
     if (s->Va != NULL && s->PktData[b] != NULL) {
+        const SHORT *pcm = (const SHORT *)s->PktData[b];
+        ULONG i, n = s->PacketSize / sizeof(SHORT);
+        for (i = 0; i < n; i += 8) {
+            LONG v = pcm[i];
+            if (v != 0) {
+                s->StreamNz++;
+                if (v < 0) v = -v;
+                if (v > s->StreamPeak) s->StreamPeak = v;
+            }
+        }
         RtlCopyMemory(s->Va + (SIZE_T)slot * s->PacketSize, s->PktData[b], s->PacketSize);
     }
 }
@@ -276,6 +288,8 @@ static NTSTATUS SpkRun(ACXSTREAM Stream)
     RtlZeroMemory(s->Va, s->AllocBytes);
     s->RunBase = s->PacketsDone;
     s->RunConsumed = 0;
+    s->StreamNz = 0;
+    s->StreamPeak = 0;
     CopyPacket(s, 0);
     CopyPacket(s, 1);
     KeReleaseSpinLock(&s->Lock, irql);
@@ -319,7 +333,8 @@ static NTSTATUS SpkPause(ACXSTREAM Stream)
     s->Running = FALSE;
     KeReleaseSpinLock(&s->Lock, irql);
     (VOID)HwStreamPause(s->Device);
-    LogPrint("pause at %llu bytes, %u packets\r\n", s->Linear, s->PacketsDone);
+    LogPrint("pause at %llu bytes, %u packets, pcm nz=%u peak=%d\r\n", s->Linear, s->PacketsDone,
+             s->StreamNz, s->StreamPeak);
     return STATUS_SUCCESS;
 }
 

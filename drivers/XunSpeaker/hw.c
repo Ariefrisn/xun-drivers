@@ -507,8 +507,10 @@ static VOID AmpOn(BOOLEAN On)
             }
             (VOID)TaI2cWrite16(g_FsAddrs[k], 0x11, 0x008F);     /* Boost/PLL/Class-D enable */
             status = TaI2cWrite16(g_FsAddrs[k], 0x10, 0x0000);  /* Power UP / unmute */
+            (VOID)TaI2cWrite16(g_FsAddrs[k], 0x1F, 0xCA91);     /* unlock before vol */
             (VOID)TaI2cWrite16(g_FsAddrs[k], 0x06, 0xFF00);     /* 0 dB volume */
             (VOID)TaI2cWrite16(g_FsAddrs[k], 0x16, 0xFF80);     /* fs1815 volume reg 0x16 */
+            (VOID)TaI2cWrite16(g_FsAddrs[k], 0x1F, 0x0000);     /* lock */
         } else {
             status = TaI2cWrite16(g_FsAddrs[k], 0x10, 0x0001);  /* Power down */
             (VOID)TaI2cWrite16(g_FsAddrs[k], 0x11, 0x0000);     /* Boost off */
@@ -516,6 +518,9 @@ static VOID AmpOn(BOOLEAN On)
     }
     if (On && g_FsMask != 0) {
         TaSleep(10);
+        LogPrint("amp post gpio106=%08x/%08x gpio70=%08x/%08x\r\n",
+                 TaRd(0x0096A000ULL), TaRd(0x0096A004ULL),
+                 TaRd(0x00546000ULL), TaRd(0x00546004ULL));
         Fs1815DumpRegs("amp post");
     }
     if (On && !g_AmpInit && NT_SUCCESS(status)) {
