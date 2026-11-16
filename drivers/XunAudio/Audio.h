@@ -71,6 +71,11 @@ VOID           QrtrInit(VOID);
 VOID           QrtrPoll(VOID);
 VOID           QrtrSummary(VOID);
 
+/* Fastrpc.c: FastRPC on fastrpcglink-apps-dsp */
+VOID           FastrpcInit(VOID);
+VOID           FastrpcPoll(VOID);
+VOID           FastrpcSummary(VOID);
+
 /* Gpr.c: GPR (AudioReach packet router) on adsp_apps */
 VOID           GprInit(VOID);
 VOID           GprPoll(VOID);

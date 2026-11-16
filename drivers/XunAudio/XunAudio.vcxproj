@@ -73,6 +73,7 @@
     <ClCompile Include="Pas.c" />
     <ClCompile Include="port.c" />
     <ClCompile Include="Qrtr.c" />
+    <ClCompile Include="Fastrpc.c" />
     <ClCompile Include="Smem.c" />
   </ItemGroup>
   <ItemGroup>
