@@ -10,36 +10,8 @@ static BOOLEAN   g_LogLockInit = FALSE;
 
 VOID LogOpen(VOID)
 {
-    UNICODE_STRING path;
-    OBJECT_ATTRIBUTES oa;
-    IO_STATUS_BLOCK iosb;
-    NTSTATUS st;
-
-    if (!g_LogLockInit) {
-        KeInitializeSpinLock(&g_LogLock);
-        g_LogLockInit = TRUE;
-    }
-
-    if (g_LogFile != NULL) {
-        return;
-    }
-
-    RtlInitUnicodeString(&path, L"\\??\\C:\\XunBluetooth.log");
-    InitializeObjectAttributes(&oa, &path, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-    st = ZwCreateFile(&g_LogFile,
-                      FILE_APPEND_DATA | SYNCHRONIZE,
-                      &oa,
-                      &iosb,
-                      NULL,
-                      FILE_ATTRIBUTE_NORMAL,
-                      FILE_SHARE_READ | FILE_SHARE_WRITE,
-                      FILE_OPEN_IF,
-                      FILE_SYNCHRONOUS_IO_NONALERT | FILE_WRITE_THROUGH,
-                      NULL,
-                      0);
-    if (!NT_SUCCESS(st)) {
-        g_LogFile = NULL;
-    }
+    /* Runtime file logging disabled for zero-jitter production performance. */
+    return;
 }
 
 VOID LogClose(VOID)
@@ -58,6 +30,10 @@ VOID LogPrint(PCSTR Fmt, ...)
     size_t len = 0;
     IO_STATUS_BLOCK iosb;
     KIRQL oldIrql;
+
+    if (g_LogFile == NULL) {
+        return;
+    }
 
     va_start(ap, Fmt);
     RtlStringCbVPrintfA(buf, sizeof(buf), Fmt, ap);
@@ -84,6 +60,10 @@ VOID LogHexDump(PCSTR Prefix, const UCHAR *Data, ULONG Len)
     ULONG n = (Len > 32) ? 32 : Len;
     ULONG pos = 0;
     ULONG i;
+
+    if (g_LogFile == NULL) {
+        return;
+    }
 
     RtlStringCbPrintfA(line, sizeof(line), "%s (%uB):", Prefix, Len);
     RtlStringCbLengthA(line, sizeof(line), (size_t *)&pos);

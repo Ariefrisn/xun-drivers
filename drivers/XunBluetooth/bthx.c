@@ -166,7 +166,7 @@ static VOID DispatchCompletedPacket(PXUN_BT_CONTEXT Ctx, UCHAR PktType, const UC
                 LogHexDump("hci <- EVT", Data, Len);
                 leAdvLogCount++;
             }
-        } else {
+        } else if (Ctx->RxEvents <= 128) {
             LogHexDump("hci <- EVT", Data, Len);
         }
     } else if (PktType == HCI_PKT_ACL) {
