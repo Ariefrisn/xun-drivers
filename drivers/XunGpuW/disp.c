@@ -1510,7 +1510,6 @@ static BOOLEAN BlApply(UCHAR Pct, BOOLEAN On)
         if (!On || Pct == 0) {
             done = XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_LSB, 0) &&
                    XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_MSB, 0) &&
-                   XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_PWM_CFG, 0x00) &&
                    XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9C) &&
                    XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x98);
             g_KtzOn = FALSE;
@@ -1520,14 +1519,15 @@ static BOOLEAN BlApply(UCHAR Pct, BOOLEAN On)
                 chipOk = XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9C);
                 XunKtzDelayUs(5000);
                 chipOk = chipOk && XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9E);
-                chipOk = chipOk && XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_PWM_CFG, 0x5F);
+                XunKtzDelayUs(10000);
                 if (chipOk) {
                     g_KtzOn = TRUE;
                 }
             }
             if (chipOk) {
                 done = XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_LSB, (UCHAR)(level & 0x7)) &&
-                       XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_MSB, (UCHAR)((level >> 3) & 0xFF));
+                       XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_MSB, (UCHAR)((level >> 3) & 0xFF)) &&
+                       XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_PWM_CFG, 0x5F);
             }
             if (done && !ktzOkLogged) {
                 UCHAR id = 0, cfg1 = 0, en = 0;
@@ -1665,8 +1665,8 @@ static VOID BlPanel(BOOLEAN On)
     if (g_Ktz.Se1 == NULL && g_Dsi == NULL) {
         return;
     }
-    if (!On && DispFileExists(L"\\??\\C:\\xun\\bl.always")) {
-        LogPrint("panel off ignored (bl.always present)\n");
+    if (!On && (DispFileExists(L"\\??\\C:\\xun\\bl.always") || (g_Done < 10 && !DispFileExists(L"\\??\\C:\\xun\\bl.off")))) {
+        LogPrint("panel off deferred / ignored (done=%u, irql=%u)\n", g_Done, (ULONG)KeGetCurrentIrql());
         return;
     }
     LogPrint("BlPanel(%u) irql=%u done=%u\n", On ? 1u : 0u, (ULONG)KeGetCurrentIrql(), g_Done);
