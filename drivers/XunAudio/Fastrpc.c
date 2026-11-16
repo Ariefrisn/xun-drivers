@@ -1,32 +1,56 @@
 /*
- * Fastrpc.c: Qualcomm FastRPC over GLINK ("fastrpcglink-apps-dsp") probe & bridge
- * for ADSP sensor_pd (sensorspd) on Redmi Pad SE (SM6225).
+ * Fastrpc.c: Qualcomm FastRPC over GLINK ("fastrpcglink-apps-dsp")
+ * Safe Stage 1b: read-only APPS_SMMU (0x0C600000) survey for ADSP FastRPC SIDs (0x1C3..0x1C7).
  */
 #include "Audio.h"
 
 #define Out  ModemOut
 #define CHAN "fastrpcglink-apps-dsp"
 #define T    (UINT32)(AudMs () / 1000), (UINT32)(AudMs () % 1000)
+#define APPS_SMMU_PA 0x0C600000ULL
 
-#pragma pack(1)
-typedef struct {
-  INT32  ClientId;
-  INT32  Tid;
-  UINT64 Ctx;
-  UINT32 Handle;
-  UINT32 Sc;
-  UINT64 Addr;
-  UINT64 Size;
-} FASTRPC_MSG;
-
-typedef struct {
-  UINT64 Ctx;
-  INT32  RetVal;
-} FASTRPC_INVOKE_RSP;
-#pragma pack()
-
-STATIC BOOLEAN mUpLogged, mAttachSent;
+STATIC BOOLEAN mUpLogged, mSurveyDone;
 STATIC UINT32  mRxCount;
+
+STATIC VOID SmmuSurveyFastrpc(VOID)
+{
+  PHYSICAL_ADDRESS pa;
+  volatile UCHAR *smmu;
+  UINT32 idr0, idr1, nsmr, pagesz, numpage, i, freeSmrs = 0;
+
+  pa.QuadPart = (LONGLONG)APPS_SMMU_PA;
+  smmu = (volatile UCHAR *)MmMapIoSpaceEx (pa, 0x2000, PAGE_READWRITE | PAGE_NOCACHE);
+  if (smmu == NULL) {
+    Out ("  fastrpc: APPS_SMMU map failed\r\n");
+    return;
+  }
+  idr0 = *(volatile UINT32 *)(smmu + 0x20);
+  idr1 = *(volatile UINT32 *)(smmu + 0x24);
+  nsmr = idr0 & 0xFFu;
+  pagesz = (idr1 & 0x80000000u) ? 0x10000u : 0x1000u;
+  numpage = 1u << (((idr1 >> 28) & 7u) + 1u);
+  Out ("  fastrpc: APPS_SMMU sCR0=%08x nsmr=%u pagesz=%x numpage=%u\r\n",
+       *(volatile UINT32 *)smmu, nsmr, pagesz, numpage);
+  for (i = 0; i < nsmr && i < 128; i++) {
+    UINT32 smr  = *(volatile UINT32 *)(smmu + 0x800 + 4 * i);
+    UINT32 s2cr = *(volatile UINT32 *)(smmu + 0xC00 + 4 * i);
+    if ((smr & 0x80000000u) == 0) {
+      freeSmrs++;
+    } else {
+      UINT32 id = smr & 0xFFFFu, mask = (smr >> 16) & 0x7FFFu;
+      UINT32 s;
+      for (s = 0x1C3; s <= 0x1C7; s++) {
+        if ((s & ~mask) == (id & ~mask)) {
+          UINT32 type = (s2cr >> 16) & 3u, cb = s2cr & 0xFFu;
+          Out ("  fastrpc: SID %03x -> SMR%u id=%04x mask=%04x S2CR=%08x (type=%u cb=%u)\r\n",
+               s, i, id, mask, s2cr, type, cb);
+        }
+      }
+    }
+  }
+  Out ("  fastrpc: free SMRs=%u (no 0x1C3..0x1C7 match if none printed above)\r\n", freeSmrs);
+  MmUnmapIoSpace ((PVOID)smmu, 0x2000);
+}
 
 STATIC VOID FastrpcRx(CONST UINT8 *P, UINT32 Len)
 {
@@ -54,41 +78,13 @@ VOID FastrpcPoll(VOID)
     mUpLogged = TRUE;
     Out ("  t=%u.%03u fastrpc: channel %a UP\r\n", T, CHAN);
   }
-  if (!mAttachSent && AudMs () >= 1500) {
-    /* Try FASTRPC_RMID_INIT_CREATE_STATIC (method 8, 3 inbufs: 0x08030000) for sensorspd */
-    PHYSICAL_ADDRESS low = { 0 }, high = { .QuadPart = 0xFFFFFFFFULL }, bound = { 0 };
-    UINT8 *buf = (UINT8 *)MmAllocateContiguousMemorySpecifyCache (4096, low, high, bound, MmNonCached);
-    mAttachSent = TRUE;
-    if (buf != NULL) {
-      PHYSICAL_ADDRESS pa = MmGetPhysicalAddress (buf);
-      UINT64 basePa = (UINT64)pa.QuadPart;
-      /* Layout: [0..47] 3x remote_buf64 {u64 pv, u64 len}, [64..79] "sensorspd\0", [80..95] pages {u64 addr, u64 size}, [96..103] attrs */
-      UINT64 *ra = (UINT64 *)buf;
-      FASTRPC_MSG msg;
-      BOOLEAN ok;
-      ZeroMem (buf, 4096);
-      CopyMem (buf + 64, "sensorspd", 10);
-      /* Remote heap: adsp_region 0xEF400000, size 0x100000 (or buf+512 2048B) */
-      *(UINT64 *)(buf + 80) = basePa + 512;
-      *(UINT64 *)(buf + 88) = 2048;
-      ra[0] = basePa + 64;  ra[1] = 10;   /* name */
-      ra[2] = basePa + 80;  ra[3] = 16;   /* mem */
-      ra[4] = basePa + 96;  ra[5] = 4;    /* attrs */
-      ZeroMem (&msg, sizeof (msg));
-      msg.ClientId = 0;
-      msg.Tid      = 0;
-      msg.Ctx      = 0x1002ULL;
-      msg.Handle   = 0;
-      msg.Sc       = (8u << 24) | (3u << 16); /* FASTRPC_RMID_INIT_CREATE_STATIC, 3 inbufs */
-      msg.Addr     = basePa;
-      msg.Size     = 128;
-      ok = GlinkSend (CHAN, &msg, sizeof (msg));
-      Out ("  t=%u.%03u fastrpc: sent INIT_CREATE_STATIC(sensorspd) pa=%llx -> %u\r\n", T, basePa, ok);
-    }
+  if (!mSurveyDone && AudMs () >= 1500) {
+    mSurveyDone = TRUE;
+    SmmuSurveyFastrpc ();
   }
 }
 
 VOID FastrpcSummary(VOID)
 {
-  Out ("  fastrpc: up=%u attach_sent=%u rx=%u\r\n", mUpLogged, mAttachSent, mRxCount);
+  Out ("  fastrpc: up=%u survey=%u rx=%u\r\n", mUpLogged, mSurveyDone, mRxCount);
 }
