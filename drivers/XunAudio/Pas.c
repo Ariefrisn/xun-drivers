@@ -525,13 +525,11 @@ EFI_STATUS AdspBoot(VOID)
   GlinkInit (part);
   QrtrInit ();
   GprInit ();
-  FastrpcInit ();
   LogSetLazy (TRUE);
   while (!gModemStop) {
     BOOLEAN busy = GlinkPoll ();
     QrtrPoll ();
     GprPoll ();
-    FastrpcPoll ();
     LabPoll ();
     if (*gAdspState & 1) {
       Out ("  t=%lu ms *** ADSP FATAL (slave-kernel %08x, wdog %u) ***\r\n", (UINT64)AudMs (), *gAdspState, WdogPending ());
@@ -549,7 +547,6 @@ EFI_STATUS AdspBoot(VOID)
   GlinkSummary ();
   QrtrSummary ();
   GprSummary ();
-  FastrpcSummary ();
   if (!(*gAdspState & 1)) {
     AdspStop ();
   }
