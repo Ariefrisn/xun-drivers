@@ -64,6 +64,15 @@ static volatile LONG g_PathRotation = D3DKMDT_VPPR_IDENTITY;
 static volatile LONG g_DirectActive;            /* VIG0 currently fetches a BO */
 static ULONG g_FbAddr, g_FbStride, g_FbFormat, g_FbOpMode; /* bootloader values, restored on fallback/stop */
 static ULONG g_DirectFlips;
+static volatile LONG g_FbCleared;
+
+static VOID ClearBootFbOnce(VOID)
+{
+    if (g_Fb != NULL && InterlockedCompareExchange(&g_FbCleared, 1, 0) == 0) {
+        RtlZeroMemory(g_Fb, (SIZE_T)g_Post.Pitch * g_Post.Height);
+        KeMemoryBarrier();
+    }
+}
 
 static BOOLEAN IsRotationSupported(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION R)
 {
@@ -114,9 +123,9 @@ static BOOLEAN DirectSelect(TGPU_ALLOCATION *Al)
         g_DirectFlips++;
         return TRUE;
     }
-    /* When Al == NULL (explicit teardown/destroy), hand MDP back to g_Fb immediately; for non-direct
-       allocations keep the current image steady until CopyRectToFb updates g_Fb, avoiding stale-FB flicker. */
+    /* When Al == NULL (explicit teardown/destroy), clear stale UEFI boot FB before handing MDP back to g_Fb. */
     if (Al == NULL && g_DirectOk && InterlockedExchange(&g_DirectActive, 0)) {
+        ClearBootFbOnce();
         MdpScanFrom(g_FbAddr, g_FbStride, FALSE);
     }
     return FALSE;
@@ -675,6 +684,8 @@ static BOOLEAN DispFileExists(PCWSTR Path)
 
 static VOID PanelPollThread(PVOID Ctx);
 static volatile LONG g_PanelStop;
+static volatile LONG g_PanelWantOff;
+static KEVENT g_PanelKick;
 static PETHREAD g_PanelThreadObj;
 
 NTSTATUS DispStart(PDXGKRNL_INTERFACE Dxgk)
@@ -744,6 +755,8 @@ NTSTATUS DispStart(PDXGKRNL_INTERFACE Dxgk)
     {
         HANDLE hThread = NULL;
         InterlockedExchange(&g_PanelStop, 0);
+        InterlockedExchange(&g_PanelWantOff, 0);
+        KeInitializeEvent(&g_PanelKick, SynchronizationEvent, FALSE);
         if (NT_SUCCESS(PsCreateSystemThread(&hThread, THREAD_ALL_ACCESS, NULL, NULL, NULL, PanelPollThread, NULL))) {
             (VOID)ObReferenceObjectByHandle(hThread, THREAD_ALL_ACCESS, *PsThreadType, KernelMode, (PVOID *)&g_PanelThreadObj, NULL);
             ZwClose(hThread);
@@ -756,11 +769,13 @@ VOID DispStop(VOID)
 {
     if (g_PanelThreadObj != NULL) {
         InterlockedExchange(&g_PanelStop, 1);
+        KeSetEvent(&g_PanelKick, IO_NO_INCREMENT, FALSE);
         KeWaitForSingleObject(g_PanelThreadObj, Executive, KernelMode, FALSE, NULL);
         ObDereferenceObject(g_PanelThreadObj);
         g_PanelThreadObj = NULL;
     }
     if (g_DirectOk && InterlockedExchange(&g_DirectActive, 0)) {
+        ClearBootFbOnce();
         MdpScanFrom(g_FbAddr, g_FbStride, FALSE);        /* hand the panel back on the framebuffer */
         LogPrint("direct scanout: back to the framebuffer (%u direct flips)\n", g_DirectFlips);
     }
@@ -1495,6 +1510,7 @@ static BOOLEAN BlApply(UCHAR Pct, BOOLEAN On)
         if (!On || Pct == 0) {
             done = XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_LSB, 0) &&
                    XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_MSB, 0) &&
+                   XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_PWM_CFG, 0x00) &&
                    XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9C) &&
                    XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x98);
             g_KtzOn = FALSE;
@@ -1504,6 +1520,7 @@ static BOOLEAN BlApply(UCHAR Pct, BOOLEAN On)
                 chipOk = XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9C);
                 XunKtzDelayUs(5000);
                 chipOk = chipOk && XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9E);
+                chipOk = chipOk && XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_PWM_CFG, 0x5F);
                 if (chipOk) {
                     g_KtzOn = TRUE;
                 }
@@ -1588,6 +1605,7 @@ static NTSTATUS APIENTRY BlSet(HANDLE Ctx, UCHAR Pct)
 }
 
 static BOOLEAN g_PanelOffApplied;
+static BOOLEAN g_RegPanelOffLast;
 
 static BOOLEAN ReadPanelOffReg(VOID)
 {
@@ -1611,41 +1629,50 @@ static VOID PanelPollThread(PVOID Ctx)
     LARGE_INTEGER d;
     UNREFERENCED_PARAMETER(Ctx);
     d.QuadPart = -1000000LL; /* 100 ms */
+    g_RegPanelOffLast = ReadPanelOffReg();
     while (!InterlockedCompareExchange(&g_PanelStop, 0, 0)) {
+        if (g_DirectFlips > 0) {
+            ClearBootFbOnce();
+        }
         if (g_Ktz.Se1 != NULL || g_Dsi != NULL) {
-            BOOLEAN wantOff = ReadPanelOffReg();
+            BOOLEAN regOff = ReadPanelOffReg();
+            BOOLEAN wantOff;
+            if (regOff != g_RegPanelOffLast) {
+                g_RegPanelOffLast = regOff;
+                InterlockedExchange(&g_PanelWantOff, regOff ? 1 : 0);
+            }
+            wantOff = InterlockedCompareExchange(&g_PanelWantOff, 0, 0) != 0;
             if (wantOff != g_PanelOffApplied) {
                 BOOLEAN done = BlApply(g_Brightness, !wantOff);
+                ULONG panelOff = wantOff ? 1u : 0u;
                 g_PanelOffApplied = wantOff;
-                LogPrint("panel %s (XunPanelOff=%u, backlight %u%%): %s\n",
-                         wantOff ? "off" : "on", wantOff ? 1u : 0u,
-                         g_Brightness, done ? "done" : "NO DONE");
+                g_RegPanelOffLast = wantOff;
+                (VOID)RtlWriteRegistryValue(RTL_REGISTRY_ABSOLUTE,
+                                            L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control",
+                                            L"XunPanelOff", REG_DWORD, &panelOff, sizeof(panelOff));
+                LogPrint("panel %s (wantOff=%u, backlight %u%%): %s (irq=%08x)\n",
+                         wantOff ? "off" : "on", panelOff,
+                         g_Brightness, done ? "done" : "NO DONE", g_Ktz.LastIrq);
             }
         }
-        KeDelayExecutionThread(KernelMode, FALSE, &d);
+        KeWaitForSingleObject(&g_PanelKick, Executive, KernelMode, FALSE, &d);
     }
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
 static VOID BlPanel(BOOLEAN On)
 {
-    BOOLEAN done;
-
-    if ((g_Ktz.Se1 == NULL && g_Dsi == NULL) || KeGetCurrentIrql() != PASSIVE_LEVEL) {
+    if (g_Ktz.Se1 == NULL && g_Dsi == NULL) {
         return;
     }
-    if (!On && (DispFileExists(L"\\??\\C:\\xun\\bl.always") || (g_Done < 10 && !DispFileExists(L"\\??\\C:\\xun\\bl.off")))) {
-        LogPrint("panel off deferred / ignored (done=%u, bl.always=%u)\n", g_Done, DispFileExists(L"\\??\\C:\\xun\\bl.always"));
+    if (!On && DispFileExists(L"\\??\\C:\\xun\\bl.always")) {
+        LogPrint("panel off ignored (bl.always present)\n");
         return;
     }
-    done = BlApply(g_Brightness, On);
-    g_PanelOffApplied = !On;
-    LogPrint("panel %s (backlight %u%%): %s\n", On ? "on" : "off", g_Brightness, done ? "done" : "NO DONE");
-    {
-        ULONG panelOff = On ? 0u : 1u;
-        (VOID)RtlWriteRegistryValue(RTL_REGISTRY_ABSOLUTE,
-                                    L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control",
-                                    L"XunPanelOff", REG_DWORD, &panelOff, sizeof(panelOff));
+    LogPrint("BlPanel(%u) irql=%u done=%u\n", On ? 1u : 0u, (ULONG)KeGetCurrentIrql(), g_Done);
+    InterlockedExchange(&g_PanelWantOff, On ? 0 : 1);
+    if (KeGetCurrentIrql() <= DISPATCH_LEVEL) {
+        KeSetEvent(&g_PanelKick, IO_NO_INCREMENT, FALSE);
     }
 }
 
