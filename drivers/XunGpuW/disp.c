@@ -1510,24 +1510,17 @@ static BOOLEAN BlApply(UCHAR Pct, BOOLEAN On)
         if (!On || Pct == 0) {
             done = XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_LSB, 0) &&
                    XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_MSB, 0) &&
-                   XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9C) &&
-                   XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x98);
+                   XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_PWM_CFG, 0x00);
             g_KtzOn = FALSE;
         } else {
             BOOLEAN chipOk = XunKtzInitChip(&g_Ktz);
-            if (chipOk && !g_KtzOn) {
-                chipOk = XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9C);
-                XunKtzDelayUs(5000);
-                chipOk = chipOk && XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_EN, 0x9E);
-                XunKtzDelayUs(10000);
-                if (chipOk) {
-                    g_KtzOn = TRUE;
-                }
-            }
             if (chipOk) {
                 done = XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_LSB, (UCHAR)(level & 0x7)) &&
                        XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_BL_MSB, (UCHAR)((level >> 3) & 0xFF)) &&
                        XunKtzWriteReg(&g_Ktz, XUN_KTZ_REG_PWM_CFG, 0x5F);
+                if (done) {
+                    g_KtzOn = TRUE;
+                }
             }
             if (done && !ktzOkLogged) {
                 UCHAR id = 0, cfg1 = 0, en = 0;

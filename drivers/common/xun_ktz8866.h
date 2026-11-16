@@ -341,11 +341,7 @@ static __inline BOOLEAN XunKtzInitChip(_Inout_ XUN_KTZ_BUS *B)
     if (!XunKtzWriteReg(B, XUN_KTZ_REG_OPT1, 0x30) ||
         !XunKtzWriteReg(B, XUN_KTZ_REG_OPT2, 0x28) ||
         !XunKtzWriteReg(B, XUN_KTZ_REG_OPT3, 0x28) ||
-        !XunKtzWriteReg(B, XUN_KTZ_REG_BL_EN, 0x9C)) {
-        return FALSE;
-    }
-    XunKtzDelayUs(5000);
-    if (!XunKtzWriteReg(B, XUN_KTZ_REG_BL_EN, 0x9E)) {
+        !XunKtzWriteReg(B, XUN_KTZ_REG_BL_EN, 0x9E)) {
         return FALSE;
     }
     XunKtzDelayUs(10000);
