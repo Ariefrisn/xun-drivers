@@ -6,23 +6,8 @@ static BOOLEAN g_LogInit;
 
 VOID LogOpen(VOID)
 {
-    UNICODE_STRING name = RTL_CONSTANT_STRING(L"\\??\\C:\\XunUsb.log");
-    OBJECT_ATTRIBUTES oa;
-    IO_STATUS_BLOCK iosb;
-
-    if (!g_LogInit) {
-        KeInitializeMutex(&g_LogLock, 0);
-        g_LogInit = TRUE;
-    }
-    if (g_LogFile != NULL || KeGetCurrentIrql() != PASSIVE_LEVEL) {
-        return;
-    }
-    InitializeObjectAttributes(&oa, &name, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-    if (!NT_SUCCESS(ZwCreateFile(&g_LogFile, FILE_APPEND_DATA | SYNCHRONIZE, &oa, &iosb, NULL,
-                                 FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN_IF,
-                                 FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE | FILE_WRITE_THROUGH, NULL, 0))) {
-        g_LogFile = NULL;
-    }
+    /* Runtime file logging disabled for clean release performance. */
+    return;
 }
 
 VOID LogClose(VOID)
@@ -55,3 +40,4 @@ VOID LogPrint(_In_z_ _Printf_format_string_ PCSTR Fmt, ...)
     ZwWriteFile(g_LogFile, NULL, NULL, NULL, &iosb, line, (ULONG)len, NULL, NULL);
     KeReleaseMutex(&g_LogLock, FALSE);
 }
+

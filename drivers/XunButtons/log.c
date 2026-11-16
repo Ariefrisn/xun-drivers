@@ -10,23 +10,8 @@ static BOOLEAN   g_LogInit;
 
 VOID LogOpen(VOID)
 {
-    UNICODE_STRING name = RTL_CONSTANT_STRING(L"\\??\\C:\\XunButtons.log");
-    OBJECT_ATTRIBUTES oa;
-    IO_STATUS_BLOCK iosb;
-
-    if (!g_LogInit) {
-        KeInitializeMutex(&g_LogLock, 0);
-        g_LogInit = TRUE;
-    }
-    if (g_LogFile != NULL || KeGetCurrentIrql() != PASSIVE_LEVEL) {
-        return;
-    }
-    InitializeObjectAttributes(&oa, &name, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-    if (!NT_SUCCESS(ZwCreateFile(&g_LogFile, FILE_APPEND_DATA | SYNCHRONIZE, &oa, &iosb, NULL,
-                                 FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN_IF,
-                                 FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE | FILE_WRITE_THROUGH, NULL, 0))) {
-        g_LogFile = NULL;
-    }
+    /* Runtime file logging disabled for clean release performance. */
+    return;
 }
 
 VOID LogClose(VOID)
@@ -56,6 +41,10 @@ VOID LogPrint(PCSTR Fmt, ...)
     SIZE_T len = 0;
     va_list ap;
 
+    if (g_LogFile == NULL) {
+        return;
+    }
+
     va_start(ap, Fmt);
     if (NT_SUCCESS(RtlStringCbVPrintfA(buf, sizeof(buf), Fmt, ap)) &&
         NT_SUCCESS(RtlStringCbLengthA(buf, sizeof(buf), &len))) {
@@ -69,6 +58,10 @@ VOID LogHex(PCSTR Prefix, const UCHAR *Buf, ULONG Len)
     CHAR line[256];
     ULONG i;
     size_t pos;
+
+    if (g_LogFile == NULL) {
+        return;
+    }
 
     RtlStringCbCopyA(line, sizeof(line), Prefix);
     RtlStringCbLengthA(line, sizeof(line), &pos);
