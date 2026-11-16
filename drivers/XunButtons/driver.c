@@ -620,7 +620,13 @@ static VOID OnAccelSample(PVOID CallbackContext, PVOID Argument1, PVOID Argument
   pkt.reportBuffer = buf;
   pkt.reportBufferLen = sizeof(buf);
   pkt.reportId = 4;
-  (VOID)VhfReadReportSubmit(ctx->Vhf, &pkt);
+  {
+    NTSTATUS st = VhfReadReportSubmit(ctx->Vhf, &pkt);
+    static ULONG s_cnt;
+    if (s_cnt++ < 3) {
+      LogPrint("accel: submit #%u x=%d y=%d z=%d mG -> %08x\n", s_cnt, ax, ay, az, st);
+    }
+  }
 }
 
 static NTSTATUS EvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit) {

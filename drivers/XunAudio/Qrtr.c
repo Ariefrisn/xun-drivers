@@ -46,8 +46,8 @@ STATIC struct { UINT32 Svc, Inst, Node, Port; } mSrv[64];
 STATIC UINTN   mSrvCount, mLookups, mPdReqs, mOther, mResumes;
 
 /* SNS_CLIENT_SVC (0x190) state for mir3da accelerometer */
-STATIC BOOLEAN mSnsFound, mSnsSuidSent, mSnsCfgSent;
-STATIC UINT32  mSnsNode, mSnsPort, mSnsLogCnt, mSnsSampleCnt;
+STATIC BOOLEAN mSnsFound, mSnsSuidSent, mSnsCfgSent, mSnsNoLenPrefix;
+STATIC UINT32  mSnsNode, mSnsPort, mSnsLogCnt, mSnsSampleCnt, mSnsSendMs;
 STATIC UINT16  mSnsTxn = 1;
 STATIC UINT64  mAccelSuidLo, mAccelSuidHi;
 STATIC PCALLBACK_OBJECT mAccelCb;
@@ -178,19 +178,23 @@ STATIC VOID SnsSendClientReq(UINT64 SuidLo, UINT64 SuidHi, UINT32 MsgId, CONST U
     pLen += rLen;
   }
 
-  /* QMI SNS_CLIENT_REQ_V01 (0x0020): TLV 0x01 (2B len + 2B payload_len + pb), TLV 0x02 (use_jumbo=0) */
+  /* QMI SNS_CLIENT_REQ_V01 (0x0020): TLV 0x01 (payload), TLV 0x02 (use_jumbo=0) */
   qmi[0] = QMI_REQ;
   *(UINT16 *)(qmi + 1) = mSnsTxn++;
   *(UINT16 *)(qmi + 3) = 0x0020;
-  *(UINT16 *)(qmi + 5) = (UINT16)(1 + 2 + 2 + pLen + 4);
   qLen = 7;
   qmi[qLen++] = 0x01;
-  *(UINT16 *)(qmi + qLen) = (UINT16)(2 + pLen); qLen += 2;
-  *(UINT16 *)(qmi + qLen) = (UINT16)pLen;       qLen += 2;
-  CopyMem (qmi + qLen, pb, pLen);               qLen += pLen;
+  if (mSnsNoLenPrefix) {
+    *(UINT16 *)(qmi + qLen) = (UINT16)pLen;       qLen += 2;
+  } else {
+    *(UINT16 *)(qmi + qLen) = (UINT16)(2 + pLen); qLen += 2;
+    *(UINT16 *)(qmi + qLen) = (UINT16)pLen;       qLen += 2;
+  }
+  CopyMem (qmi + qLen, pb, pLen);                 qLen += pLen;
   qmi[qLen++] = 0x02;
-  *(UINT16 *)(qmi + qLen) = 1;                  qLen += 2;
+  *(UINT16 *)(qmi + qLen) = 1;                    qLen += 2;
   qmi[qLen++] = 0;
+  *(UINT16 *)(qmi + 5) = (UINT16)(qLen - 7);
 
   QrtrSend (QRTR_TYPE_DATA, PORT_SNS, mSnsNode, mSnsPort, qmi, qLen);
 }
@@ -376,8 +380,19 @@ STATIC VOID SnsRx(CONST UINT8 *Qmi, UINT32 Len)
   ctl    = Qmi[0];
   msgId  = *(CONST UINT16 *)(Qmi + 3);
   msgLen = *(CONST UINT16 *)(Qmi + 5);
-  if (mSnsLogCnt++ < 6) {
-    Out ("  t=%u.%03u sns: rx qmi ctl=%02x msg=%04x len=%u\r\n", T, ctl, msgId, msgLen);
+  if (mSnsLogCnt++ < 10) {
+    UINT32 d0 = (Len >= 11) ? *(CONST UINT32 *)(Qmi + 7) : 0;
+    UINT32 d1 = (Len >= 14) ? *(CONST UINT32 *)(Qmi + 10) : 0;
+    Out ("  t=%u.%03u sns: rx qmi ctl=%02x msg=%04x len=%u data=%08x %08x\r\n", T, ctl, msgId, msgLen, d0, d1);
+  }
+  if (ctl == QMI_RESP && msgId == 0x0020 && Len >= 14 && Qmi[7] == 0x02) {
+    UINT16 res = *(CONST UINT16 *)(Qmi + 10);
+    UINT16 err = *(CONST UINT16 *)(Qmi + 12);
+    if (res != 0 && !mSnsNoLenPrefix) {
+      Out ("  t=%u.%03u sns: QMI_RESP err=%u -> retrying without 2B inner len\r\n", T, err);
+      mSnsNoLenPrefix = TRUE;
+      mSnsSuidSent = FALSE;
+    }
   }
   if (ctl == QMI_IND && (msgId == 0x0021 || msgId == 0x0022) && 7u + msgLen <= Len) {
     while (off + 3 <= 7u + msgLen) {
@@ -612,7 +627,7 @@ VOID QrtrPoll(VOID)
     mAnnounced = TRUE;
     Out ("  t=%u.%03u announced pd-mapper 0x40\r\n", T);
   }
-  if (mHelloRx && mSnsFound && !mSnsSuidSent) {
+  if (mHelloRx && mSnsFound && !mSnsSuidSent && AudMs () >= 2500) {
     /* sns_suid_req: 1: data_type="accel", 2: register_updates=0, 3: default_only=1 */
     STATIC CONST UINT8 suidReq[11] = {
       0x0A, 0x05, 'a', 'c', 'c', 'e', 'l',
@@ -621,7 +636,8 @@ VOID QrtrPoll(VOID)
     };
     SnsSendClientReq (0xABABABABABABABABULL, 0xABABABABABABABABULL, 512, suidReq, sizeof (suidReq));
     mSnsSuidSent = TRUE;
-    Out ("  t=%u.%03u sns: sent SUID lookup for accel to %u:%x\r\n", T, mSnsNode, mSnsPort);
+    mSnsSendMs = AudMs ();
+    Out ("  t=%u.%03u sns: sent SUID lookup for accel to %u:%x (noLen=%u)\r\n", T, mSnsNode, mSnsPort, mSnsNoLenPrefix);
   }
 }
 
