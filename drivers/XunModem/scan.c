@@ -56,11 +56,10 @@
 #define MAX_BSS                 64
 #define NOISE_FLOOR             (-95)              /* ATH10K_DEFAULT_NOISE_FLOOR */
 
-/* 2.4 GHz 1-13, 5 GHz UNII-1/2/2e/3 (20 MHz centres) */
+/* 2.4 GHz 1-13 + 5 GHz non-DFS UNII-1/3 (20 MHz centres) for fast <2.5s complete scans */
 STATIC CONST UINT16 mFreqs[] = {
   2412, 2417, 2422, 2427, 2432, 2437, 2442, 2447, 2452, 2457, 2462, 2467, 2472,
-  5180, 5200, 5220, 5240, 5260, 5280, 5300, 5320,
-  5500, 5520, 5540, 5560, 5580, 5600, 5620, 5640, 5660, 5680, 5700,
+  5180, 5200, 5220, 5240,
   5745, 5765, 5785, 5805, 5825,
 };
 #define NFREQ ARRAY_SIZE (mFreqs)
@@ -134,14 +133,14 @@ STATIC BOOLEAN SendStartScan(VOID)
   c = PutU32 (c, VDEV_ID);
   c = PutU32 (c, 1);                               /* WMI_SCAN_PRIORITY_LOW */
   c = PutU32 (c, EV_STARTED | EV_COMPLETED | EV_BSS_CHANNEL | EV_FOREIGN_CHANNEL | EV_FOREIGN_EXIT | EV_DEQUEUED);
-  c = PutU32 (c, 65);                              /* dwell_time_active */
-  c = PutU32 (c, 120);                             /* dwell_time_passive */
-  c = PutU32 (c, 20);                              /* min_rest_time */
-  c = PutU32 (c, 50);                              /* max_rest_time */
-  c = PutU32 (c, 25);                              /* repeat_probe_time */
+  c = PutU32 (c, 105);                             /* dwell_time_active (>102.4ms beacon interval) */
+  c = PutU32 (c, 110);                             /* dwell_time_passive */
+  c = PutU32 (c, 10);                              /* min_rest_time */
+  c = PutU32 (c, 20);                              /* max_rest_time */
+  c = PutU32 (c, 30);                              /* repeat_probe_time */
   c = PutU32 (c, 0);                               /* probe_spacing_time */
   c = PutU32 (c, 0);                               /* idle_time */
-  c = PutU32 (c, 8000);                            /* max_scan_time */
+  c = PutU32 (c, 5000);                            /* max_scan_time */
   c = PutU32 (c, 5);                               /* probe_delay */
   c = PutU32 (c, SCAN_CHAN_STAT_EVENT ^ SCAN_FILTER_PROBE_REQ);
   c = PutU32 (c, 0);                               /* burst_duration_ms */
@@ -149,7 +148,7 @@ STATIC BOOLEAN SendStartScan(VOID)
   c = PutU32 (c, 1);                               /* num_bssids */
   c = PutU32 (c, 1);                               /* num_ssids (wildcard probe req) */
   c = PutU32 (c, 0);                               /* ie_len */
-  c = PutU32 (c, 2);                               /* num_probes */
+  c = PutU32 (c, 3);                               /* num_probes */
   p = c + 16;                                      /* mac_addr + mac_mask: zero */
   c = WmiPutTlv (p, TAG_ARRAY_UINT32, NFREQ * 4);
   for (i = 0; i < NFREQ; i++) {

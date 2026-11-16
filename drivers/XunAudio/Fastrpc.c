@@ -55,19 +55,36 @@ VOID FastrpcPoll(VOID)
     Out ("  t=%u.%03u fastrpc: channel %a UP\r\n", T, CHAN);
   }
   if (!mAttachSent && AudMs () >= 1500) {
-    FASTRPC_MSG msg;
-    BOOLEAN ok;
-    ZeroMem (&msg, sizeof (msg));
-    msg.ClientId = 0;
-    msg.Tid      = 0;
-    msg.Ctx      = 0x1001ULL;
-    msg.Handle   = 0; /* FASTRPC_INIT_HANDLE */
-    msg.Sc       = 0; /* FASTRPC_RMID_INIT_ATTACH */
-    msg.Addr     = 0;
-    msg.Size     = 0;
-    ok = GlinkSend (CHAN, &msg, sizeof (msg));
+    /* Try FASTRPC_RMID_INIT_CREATE_STATIC (method 8, 3 inbufs: 0x08030000) for sensorspd */
+    PHYSICAL_ADDRESS low = { 0 }, high = { .QuadPart = 0xFFFFFFFFULL }, bound = { 0 };
+    UINT8 *buf = (UINT8 *)MmAllocateContiguousMemorySpecifyCache (4096, low, high, bound, MmNonCached);
     mAttachSent = TRUE;
-    Out ("  t=%u.%03u fastrpc: sent INIT_ATTACH (%u B) -> %u\r\n", T, (UINT32)sizeof (msg), ok);
+    if (buf != NULL) {
+      PHYSICAL_ADDRESS pa = MmGetPhysicalAddress (buf);
+      UINT64 basePa = (UINT64)pa.QuadPart;
+      /* Layout: [0..47] 3x remote_buf64 {u64 pv, u64 len}, [64..79] "sensorspd\0", [80..95] pages {u64 addr, u64 size}, [96..103] attrs */
+      UINT64 *ra = (UINT64 *)buf;
+      FASTRPC_MSG msg;
+      BOOLEAN ok;
+      ZeroMem (buf, 4096);
+      CopyMem (buf + 64, "sensorspd", 10);
+      /* Remote heap: adsp_region 0xEF400000, size 0x100000 (or buf+512 2048B) */
+      *(UINT64 *)(buf + 80) = basePa + 512;
+      *(UINT64 *)(buf + 88) = 2048;
+      ra[0] = basePa + 64;  ra[1] = 10;   /* name */
+      ra[2] = basePa + 80;  ra[3] = 16;   /* mem */
+      ra[4] = basePa + 96;  ra[5] = 4;    /* attrs */
+      ZeroMem (&msg, sizeof (msg));
+      msg.ClientId = 0;
+      msg.Tid      = 0;
+      msg.Ctx      = 0x1002ULL;
+      msg.Handle   = 0;
+      msg.Sc       = (8u << 24) | (3u << 16); /* FASTRPC_RMID_INIT_CREATE_STATIC, 3 inbufs */
+      msg.Addr     = basePa;
+      msg.Size     = 128;
+      ok = GlinkSend (CHAN, &msg, sizeof (msg));
+      Out ("  t=%u.%03u fastrpc: sent INIT_CREATE_STATIC(sensorspd) pa=%llx -> %u\r\n", T, basePa, ok);
+    }
   }
 }
 
