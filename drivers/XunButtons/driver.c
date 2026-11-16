@@ -11,6 +11,7 @@
  * (Report 2).
  */
 #include "driver.h"
+#include "../common/xun_accel.h"
 
 #define SPMI_CORE_BASE 0x01C40000ULL
 #define SPMI_CORE_SIZE 0x1100
@@ -102,6 +103,13 @@ typedef struct _DEVICE_CONTEXT {
   BOOLEAN PwrReported;
   ULONG PwrHoldTicks;
   BOOLEAN PwrLongSent;
+  PCALLBACK_OBJECT AccelCbObj;
+  PVOID AccelCbReg;
+  UCHAR SensorReportState;
+  UCHAR SensorPowerState;
+  ULONG SensorInterval;
+  USHORT SensorSensitivity;
+  SHORT LastAxMg, LastAyMg, LastAzMg;
 } DEVICE_CONTEXT, *PDEVICE_CONTEXT;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DEVICE_CONTEXT, DeviceGetContext)
@@ -147,6 +155,35 @@ static const UCHAR g_ReportDescriptor[] = {
     0x15, 0x00, 0x26, 0xE7, 0x00,
     0x75, 0x08, 0x95, 0x01,
     0x81, 0x00,       /*   Input (Data,Array) */
+    0xC0,
+    /* Report ID 4: HID Sensor Accelerometer 3D (Usage Page 0x20, Usage 0x73) */
+    0x05, 0x20,       /* Usage Page (Sensor) */
+    0x09, 0x73,       /* Usage (Motion: Accelerometer 3D) */
+    0xA1, 0x01,       /* Collection (Application) */
+    0x85, 0x04,       /*   Report ID 4 */
+    /* Feature Report (9 bytes): ReportingState(1), PowerState(1), SensorState(1), ReportInterval(4), ChangeSens(2) */
+    0x0A, 0x16, 0x03, /*   Usage (Property: Reporting State) */
+    0x15, 0x00, 0x25, 0x05, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x02,
+    0x0A, 0x19, 0x03, /*   Usage (Property: Power State) */
+    0x15, 0x00, 0x25, 0x05, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x02,
+    0x0A, 0x01, 0x02, /*   Usage (Property: Sensor State) */
+    0x15, 0x00, 0x25, 0x06, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x02,
+    0x0A, 0x0E, 0x03, /*   Usage (Property: Report Interval) */
+    0x15, 0x00, 0x27, 0xFF, 0xFF, 0xFF, 0x7F, 0x55, 0x00, 0x75, 0x20, 0x95, 0x01, 0xB1, 0x02,
+    0x0A, 0x0F, 0x03, /*   Usage (Property: Change Sensitivity Abs) */
+    0x15, 0x00, 0x26, 0xFF, 0x7F, 0x55, 0xFD, 0x75, 0x10, 0x95, 0x01, 0xB1, 0x02,
+    /* Input Report (8 bytes): SensorState(1), SensorEvent(1), AccelX/Y/Z(6) */
+    0x0A, 0x01, 0x02, /*   Usage (Property: Sensor State) */
+    0x15, 0x00, 0x25, 0x06, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02,
+    0x0A, 0x02, 0x02, /*   Usage (Property: Sensor Event) */
+    0x15, 0x00, 0x25, 0x05, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02,
+    0x0A, 0x53, 0x04, /*   Usage (Data Field: Acceleration Axis X) */
+    0x0A, 0x54, 0x04, /*   Usage (Data Field: Acceleration Axis Y) */
+    0x0A, 0x55, 0x04, /*   Usage (Data Field: Acceleration Axis Z) */
+    0x16, 0x00, 0x80, /*   Logical Min (-32768) */
+    0x26, 0xFF, 0x7F, /*   Logical Max (32767) */
+    0x55, 0xFD,       /*   Unit Exponent (-3, milli-G) */
+    0x75, 0x10, 0x95, 0x03, 0x81, 0x02,
     0xC0,
 };
 
@@ -514,6 +551,78 @@ static VOID EvtDriverUnload(WDFDRIVER Driver) {
   LogClose();
 }
 
+static VOID OnVhfGetFeature(PVOID VhfClientContext,
+                            VHFOPERATIONHANDLE VhfOperationHandle,
+                            PVOID VhfOperationContext,
+                            PHID_XFER_PACKET HidTransferPacket) {
+  PDEVICE_CONTEXT ctx = (PDEVICE_CONTEXT)VhfClientContext;
+  NTSTATUS st = STATUS_INVALID_PARAMETER;
+  UNREFERENCED_PARAMETER(VhfOperationContext);
+
+  if (HidTransferPacket->reportId == 4 && HidTransferPacket->reportBufferLen >= 10) {
+    PUCHAR b = HidTransferPacket->reportBuffer;
+    b[0] = 4;
+    b[1] = ctx->SensorReportState;
+    b[2] = ctx->SensorPowerState;
+    b[3] = 2; /* Sensor State: Ready */
+    RtlCopyMemory(b + 4, &ctx->SensorInterval, 4);
+    RtlCopyMemory(b + 8, &ctx->SensorSensitivity, 2);
+    st = STATUS_SUCCESS;
+  }
+  VhfAsyncOperationComplete(VhfOperationHandle, st);
+}
+
+static VOID OnVhfSetFeature(PVOID VhfClientContext,
+                            VHFOPERATIONHANDLE VhfOperationHandle,
+                            PVOID VhfOperationContext,
+                            PHID_XFER_PACKET HidTransferPacket) {
+  PDEVICE_CONTEXT ctx = (PDEVICE_CONTEXT)VhfClientContext;
+  NTSTATUS st = STATUS_INVALID_PARAMETER;
+  UNREFERENCED_PARAMETER(VhfOperationContext);
+
+  if (HidTransferPacket->reportId == 4 && HidTransferPacket->reportBufferLen >= 10) {
+    PUCHAR b = HidTransferPacket->reportBuffer;
+    ctx->SensorReportState = b[1];
+    ctx->SensorPowerState = b[2];
+    RtlCopyMemory(&ctx->SensorInterval, b + 4, 4);
+    RtlCopyMemory(&ctx->SensorSensitivity, b + 8, 2);
+    st = STATUS_SUCCESS;
+  }
+  VhfAsyncOperationComplete(VhfOperationHandle, st);
+}
+
+static VOID OnAccelSample(PVOID CallbackContext, PVOID Argument1, PVOID Argument2) {
+  PDEVICE_CONTEXT ctx = (PDEVICE_CONTEXT)CallbackContext;
+  PXUN_ACCEL_SAMPLE s = (PXUN_ACCEL_SAMPLE)Argument1;
+  SHORT ax, ay, az;
+  UCHAR buf[9];
+  HID_XFER_PACKET pkt;
+
+  UNREFERENCED_PARAMETER(Argument2);
+  if (ctx == NULL || s == NULL || ctx->Vhf == NULL || ctx->SensorReportState == 0) {
+    return;
+  }
+  ax = (SHORT)(s->AxMg < -32767 ? -32767 : (s->AxMg > 32767 ? 32767 : s->AxMg));
+  ay = (SHORT)(s->AyMg < -32767 ? -32767 : (s->AyMg > 32767 ? 32767 : s->AyMg));
+  az = (SHORT)(s->AzMg < -32767 ? -32767 : (s->AzMg > 32767 ? 32767 : s->AzMg));
+
+  ctx->LastAxMg = ax;
+  ctx->LastAyMg = ay;
+  ctx->LastAzMg = az;
+
+  buf[0] = 4; /* Report ID 4 */
+  buf[1] = 2; /* Sensor State: Ready */
+  buf[2] = 4; /* Sensor Event: Data Updated */
+  RtlCopyMemory(buf + 3, &ax, 2);
+  RtlCopyMemory(buf + 5, &ay, 2);
+  RtlCopyMemory(buf + 7, &az, 2);
+
+  pkt.reportBuffer = buf;
+  pkt.reportBufferLen = sizeof(buf);
+  pkt.reportId = 4;
+  (VOID)VhfReadReportSubmit(ctx->Vhf, &pkt);
+}
+
 static NTSTATUS EvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit) {
   WDF_PNPPOWER_EVENT_CALLBACKS pnp;
   WDF_OBJECT_ATTRIBUTES attrs;
@@ -545,12 +654,19 @@ static NTSTATUS EvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit) {
   RtlZeroMemory(ctx, sizeof(*ctx));
   ctx->Device = device;
 
+  ctx->SensorReportState = 2; /* All Events */
+  ctx->SensorPowerState = 2;  /* D0 Full Power */
+  ctx->SensorInterval = 100;  /* 100 ms */
+  ctx->SensorSensitivity = 10;/* 10 mG */
+
   VHF_CONFIG_INIT(&cfg, WdfDeviceWdmGetDeviceObject(device),
                   (USHORT)sizeof(g_ReportDescriptor),
                   (PUCHAR)g_ReportDescriptor);
   cfg.VhfClientContext = ctx;
   cfg.VendorID = 0x05C6; /* Qualcomm */
   cfg.ProductID = 0x6125;
+  cfg.EvtVhfAsyncOperationGetFeature = OnVhfGetFeature;
+  cfg.EvtVhfAsyncOperationSetFeature = OnVhfSetFeature;
   status = VhfCreate(&cfg, &ctx->Vhf);
   LogPrint("VhfCreate: %08x\n", status);
   if (NT_SUCCESS(status)) {
@@ -562,9 +678,18 @@ static NTSTATUS EvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit) {
 
 static NTSTATUS EvtPrepareHardware(WDFDEVICE Device, WDFCMRESLIST Raw,
                                    WDFCMRESLIST Translated) {
+  PDEVICE_CONTEXT ctx = DeviceGetContext(Device);
+  UNICODE_STRING cbName;
+  OBJECT_ATTRIBUTES oa;
+
   UNREFERENCED_PARAMETER(Raw);
   UNREFERENCED_PARAMETER(Translated);
-  LogPrint("HwInit: %08x\n", HwInit(DeviceGetContext(Device)));
+  LogPrint("HwInit: %08x\n", HwInit(ctx));
+  RtlInitUnicodeString(&cbName, XUN_ACCEL_CALLBACK_NAME);
+  InitializeObjectAttributes(&oa, &cbName, OBJ_CASE_INSENSITIVE | OBJ_PERMANENT, NULL, NULL);
+  if (NT_SUCCESS(ExCreateCallback(&ctx->AccelCbObj, &oa, TRUE, TRUE))) {
+    ctx->AccelCbReg = ExRegisterCallback(ctx->AccelCbObj, OnAccelSample, ctx);
+  }
   return STATUS_SUCCESS;
 }
 
@@ -572,6 +697,14 @@ static NTSTATUS EvtReleaseHardware(WDFDEVICE Device, WDFCMRESLIST Translated) {
   PDEVICE_CONTEXT ctx = DeviceGetContext(Device);
 
   UNREFERENCED_PARAMETER(Translated);
+  if (ctx->AccelCbReg != NULL) {
+    ExUnregisterCallback(ctx->AccelCbReg);
+    ctx->AccelCbReg = NULL;
+  }
+  if (ctx->AccelCbObj != NULL) {
+    ObDereferenceObject(ctx->AccelCbObj);
+    ctx->AccelCbObj = NULL;
+  }
   if (ctx->Vhf != NULL) {
     VhfDelete(ctx->Vhf, TRUE);
     ctx->Vhf = NULL;
