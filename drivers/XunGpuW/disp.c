@@ -1664,8 +1664,8 @@ static VOID BlPanel(BOOLEAN On)
     if (g_Ktz.Se1 == NULL && g_Dsi == NULL) {
         return;
     }
-    if (!On && (DispFileExists(L"\\??\\C:\\xun\\bl.always") || (g_Done < 10 && !DispFileExists(L"\\??\\C:\\xun\\bl.off")))) {
-        LogPrint("panel off deferred / ignored (done=%u, irql=%u)\n", g_Done, (ULONG)KeGetCurrentIrql());
+    if (!On && (DispFileExists(L"\\??\\C:\\xun\\bl.always") || ((g_Done + g_DirectFlips) < 10 && !DispFileExists(L"\\??\\C:\\xun\\bl.off")))) {
+        LogPrint("panel off deferred / ignored (done=%u, flips=%u, irql=%u)\n", g_Done, g_DirectFlips, (ULONG)KeGetCurrentIrql());
         return;
     }
     LogPrint("BlPanel(%u) irql=%u done=%u\n", On ? 1u : 0u, (ULONG)KeGetCurrentIrql(), g_Done);
