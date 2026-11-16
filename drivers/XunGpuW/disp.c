@@ -1612,7 +1612,7 @@ static VOID PanelPollThread(PVOID Ctx)
     UNREFERENCED_PARAMETER(Ctx);
     d.QuadPart = -1000000LL; /* 100 ms */
     while (!InterlockedCompareExchange(&g_PanelStop, 0, 0)) {
-        if (g_Done >= 10 && (g_Ktz.Se1 != NULL || g_Dsi != NULL)) {
+        if (g_Ktz.Se1 != NULL || g_Dsi != NULL) {
             BOOLEAN wantOff = ReadPanelOffReg();
             if (wantOff != g_PanelOffApplied) {
                 BOOLEAN done = BlApply(g_Brightness, !wantOff);

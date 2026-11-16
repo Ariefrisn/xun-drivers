@@ -134,11 +134,11 @@ STATIC BOOLEAN SendStartScan(VOID)
   c = PutU32 (c, VDEV_ID);
   c = PutU32 (c, 1);                               /* WMI_SCAN_PRIORITY_LOW */
   c = PutU32 (c, EV_STARTED | EV_COMPLETED | EV_BSS_CHANNEL | EV_FOREIGN_CHANNEL | EV_FOREIGN_EXIT | EV_DEQUEUED);
-  c = PutU32 (c, 40);                              /* dwell_time_active */
-  c = PutU32 (c, 110);                             /* dwell_time_passive */
+  c = PutU32 (c, 65);                              /* dwell_time_active */
+  c = PutU32 (c, 120);                             /* dwell_time_passive */
   c = PutU32 (c, 20);                              /* min_rest_time */
   c = PutU32 (c, 50);                              /* max_rest_time */
-  c = PutU32 (c, 0);                               /* repeat_probe_time */
+  c = PutU32 (c, 25);                              /* repeat_probe_time */
   c = PutU32 (c, 0);                               /* probe_spacing_time */
   c = PutU32 (c, 0);                               /* idle_time */
   c = PutU32 (c, 8000);                            /* max_scan_time */
@@ -147,7 +147,7 @@ STATIC BOOLEAN SendStartScan(VOID)
   c = PutU32 (c, 0);                               /* burst_duration_ms */
   c = PutU32 (c, NFREQ);                           /* num_channels */
   c = PutU32 (c, 1);                               /* num_bssids */
-  c = PutU32 (c, 0);                               /* num_ssids */
+  c = PutU32 (c, 1);                               /* num_ssids (wildcard probe req) */
   c = PutU32 (c, 0);                               /* ie_len */
   c = PutU32 (c, 2);                               /* num_probes */
   p = c + 16;                                      /* mac_addr + mac_mask: zero */
@@ -155,8 +155,8 @@ STATIC BOOLEAN SendStartScan(VOID)
   for (i = 0; i < NFREQ; i++) {
     c = PutU32 (c, mFreqs[i]);
   }
-  p = WmiPutTlv (c, TAG_ARRAY_FIXED_STRUCT, 0);    /* ssids: none (passive) */
-  c = WmiPutTlv (p, TAG_ARRAY_FIXED_STRUCT, 8);    /* bssids: broadcast */
+  p = WmiPutTlv (c, TAG_ARRAY_FIXED_STRUCT, 36);   /* ssids: 1 wildcard SSID (len=0, 32-byte zero) */
+  c = WmiPutTlv (p + 36, TAG_ARRAY_FIXED_STRUCT, 8); /* bssids: broadcast */
   RtlFillMemory (c, 6, 0xFF);
   p = WmiPutTlv (c + 8, TAG_ARRAY_BYTE, 0);        /* extra IEs: none */
   return WmiSend (CMD_START_SCAN, m, (UINT32)(p - m));
