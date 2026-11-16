@@ -178,22 +178,15 @@ STATIC VOID SnsSendClientReq(UINT64 SuidLo, UINT64 SuidHi, UINT32 MsgId, CONST U
     pLen += rLen;
   }
 
-  /* QMI SNS_CLIENT_REQ_V01 (0x0020): TLV 0x01 (payload), TLV 0x02 (use_jumbo=0) */
+  /* QMI SNS_CLIENT_REQ_V01 (0x0020): mandatory TLV 0x01 (2B len + 2B payload_len + pb) */
   qmi[0] = QMI_REQ;
   *(UINT16 *)(qmi + 1) = mSnsTxn++;
   *(UINT16 *)(qmi + 3) = 0x0020;
   qLen = 7;
   qmi[qLen++] = 0x01;
-  if (mSnsNoLenPrefix) {
-    *(UINT16 *)(qmi + qLen) = (UINT16)pLen;       qLen += 2;
-  } else {
-    *(UINT16 *)(qmi + qLen) = (UINT16)(2 + pLen); qLen += 2;
-    *(UINT16 *)(qmi + qLen) = (UINT16)pLen;       qLen += 2;
-  }
-  CopyMem (qmi + qLen, pb, pLen);                 qLen += pLen;
-  qmi[qLen++] = 0x02;
-  *(UINT16 *)(qmi + qLen) = 1;                    qLen += 2;
-  qmi[qLen++] = 0;
+  *(UINT16 *)(qmi + qLen) = (UINT16)(2 + pLen); qLen += 2;
+  *(UINT16 *)(qmi + qLen) = (UINT16)pLen;       qLen += 2;
+  CopyMem (qmi + qLen, pb, pLen);               qLen += pLen;
   *(UINT16 *)(qmi + 5) = (UINT16)(qLen - 7);
 
   QrtrSend (QRTR_TYPE_DATA, PORT_SNS, mSnsNode, mSnsPort, qmi, qLen);
