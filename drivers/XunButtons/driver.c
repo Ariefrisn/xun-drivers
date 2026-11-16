@@ -53,6 +53,14 @@ static BOOLEAN IsPanelOff(VOID) {
   return val != 0;
 }
 
+static VOID SetPanelOff(BOOLEAN Off) {
+  ULONG val = Off ? 1u : 0u;
+  (VOID)RtlWriteRegistryValue(
+      RTL_REGISTRY_ABSOLUTE,
+      L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control",
+      L"XunPanelOff", REG_DWORD, &val, sizeof(val));
+}
+
 static BOOLEAN PwrOffExists(VOID) {
   UNICODE_STRING name;
   OBJECT_ATTRIBUTES oa;
@@ -414,23 +422,21 @@ static VOID PollThread(PVOID Context) {
             if (!ctx->PwrLongSent) {
               LARGE_INTEGER d;
               if (IsPanelOff()) {
-                LogPrint("keys: short press (panel off) -> wake (Shift)\n");
+                LogPrint("keys: short press (panel off) -> wake (panel on + Shift)\n");
+                SetPanelOff(FALSE);
                 SendKeyReport(ctx, 0x02, 0x00); /* Left Shift wake */
                 d.QuadPart = -500000LL;
                 KeDelayExecutionThread(KernelMode, FALSE, &d);
                 SendKeyReport(ctx, 0x00, 0x00);
               } else {
-                LogPrint("keys: short press -> Win+L (Lock) + Display Off\n");
+                LogPrint("keys: short press -> Win+L (Lock) + Panel Off\n");
                 SendKeyReport(ctx, 0x08, 0x0F); /* Left GUI + L */
                 d.QuadPart = -500000LL;         /* 50 ms */
                 KeDelayExecutionThread(KernelMode, FALSE, &d);
                 SendKeyReport(ctx, 0x00, 0x00);
-                d.QuadPart = -3500000LL;        /* 350 ms for lock screen */
+                d.QuadPart = -4000000LL;        /* 400 ms for lock screen */
                 KeDelayExecutionThread(KernelMode, FALSE, &d);
-                SendReport(ctx, 1, 1);          /* Turn off display (PBUTTONACTION=4) */
-                d.QuadPart = -500000LL;         /* 50 ms */
-                KeDelayExecutionThread(KernelMode, FALSE, &d);
-                SendReport(ctx, 1, 0);
+                SetPanelOff(TRUE);              /* Signal XunGpuW to turn panel off */
               }
             }
           }

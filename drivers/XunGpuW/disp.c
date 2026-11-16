@@ -673,6 +673,10 @@ static BOOLEAN DispFileExists(PCWSTR Path)
     return TRUE;
 }
 
+static VOID PanelPollThread(PVOID Ctx);
+static volatile LONG g_PanelStop;
+static PETHREAD g_PanelThreadObj;
+
 NTSTATUS DispStart(PDXGKRNL_INTERFACE Dxgk)
 {
     NTSTATUS st;
@@ -737,11 +741,25 @@ NTSTATUS DispStart(PDXGKRNL_INTERFACE Dxgk)
         LogPrint("vsync: ExAllocateTimer failed, 16 ms KTIMER\n");
     }
     g_TimerOn = TRUE;
+    {
+        HANDLE hThread = NULL;
+        InterlockedExchange(&g_PanelStop, 0);
+        if (NT_SUCCESS(PsCreateSystemThread(&hThread, THREAD_ALL_ACCESS, NULL, NULL, NULL, PanelPollThread, NULL))) {
+            (VOID)ObReferenceObjectByHandle(hThread, THREAD_ALL_ACCESS, *PsThreadType, KernelMode, (PVOID *)&g_PanelThreadObj, NULL);
+            ZwClose(hThread);
+        }
+    }
     return STATUS_SUCCESS;
 }
 
 VOID DispStop(VOID)
 {
+    if (g_PanelThreadObj != NULL) {
+        InterlockedExchange(&g_PanelStop, 1);
+        KeWaitForSingleObject(g_PanelThreadObj, Executive, KernelMode, FALSE, NULL);
+        ObDereferenceObject(g_PanelThreadObj);
+        g_PanelThreadObj = NULL;
+    }
     if (g_DirectOk && InterlockedExchange(&g_DirectActive, 0)) {
         MdpScanFrom(g_FbAddr, g_FbStride, FALSE);        /* hand the panel back on the framebuffer */
         LogPrint("direct scanout: back to the framebuffer (%u direct flips)\n", g_DirectFlips);
@@ -1521,9 +1539,9 @@ static BOOLEAN BlApply(UCHAR Pct, BOOLEAN On)
         }
         XunQupLockRelease(&g_BlQupLock);
     }
-    if (forceDcs && On && Pct > 0) {
+    if (forceDcs) {
         UCHAR cmd[3];
-        ULONG dcs = (On && level < 1) ? 1 : level;
+        ULONG dcs = (On && Pct > 0) ? ((level < 1) ? 1 : level) : 0;
         cmd[0] = 0x51;
         cmd[1] = (UCHAR)((dcs >> 3) & 0xFF);
         cmd[2] = (UCHAR)(dcs & 0x7);
@@ -1569,6 +1587,46 @@ static NTSTATUS APIENTRY BlSet(HANDLE Ctx, UCHAR Pct)
     return done ? STATUS_SUCCESS : STATUS_IO_TIMEOUT;
 }
 
+static BOOLEAN g_PanelOffApplied;
+
+static BOOLEAN ReadPanelOffReg(VOID)
+{
+    ULONG val = 0;
+    RTL_QUERY_REGISTRY_TABLE q[2];
+    RtlZeroMemory(q, sizeof(q));
+    q[0].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    q[0].Name = L"XunPanelOff";
+    q[0].EntryContext = &val;
+    q[0].DefaultType = REG_DWORD;
+    q[0].DefaultData = &val;
+    q[0].DefaultLength = sizeof(val);
+    RtlQueryRegistryValues(RTL_REGISTRY_ABSOLUTE,
+                           L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control",
+                           q, NULL, NULL);
+    return val != 0;
+}
+
+static VOID PanelPollThread(PVOID Ctx)
+{
+    LARGE_INTEGER d;
+    UNREFERENCED_PARAMETER(Ctx);
+    d.QuadPart = -1000000LL; /* 100 ms */
+    while (!InterlockedCompareExchange(&g_PanelStop, 0, 0)) {
+        if (g_Done >= 10 && (g_Ktz.Se1 != NULL || g_Dsi != NULL)) {
+            BOOLEAN wantOff = ReadPanelOffReg();
+            if (wantOff != g_PanelOffApplied) {
+                BOOLEAN done = BlApply(g_Brightness, !wantOff);
+                g_PanelOffApplied = wantOff;
+                LogPrint("panel %s (XunPanelOff=%u, backlight %u%%): %s\n",
+                         wantOff ? "off" : "on", wantOff ? 1u : 0u,
+                         g_Brightness, done ? "done" : "NO DONE");
+            }
+        }
+        KeDelayExecutionThread(KernelMode, FALSE, &d);
+    }
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
 static VOID BlPanel(BOOLEAN On)
 {
     BOOLEAN done;
@@ -1581,6 +1639,7 @@ static VOID BlPanel(BOOLEAN On)
         return;
     }
     done = BlApply(g_Brightness, On);
+    g_PanelOffApplied = !On;
     LogPrint("panel %s (backlight %u%%): %s\n", On ? "on" : "off", g_Brightness, done ? "done" : "NO DONE");
     {
         ULONG panelOff = On ? 0u : 1u;
