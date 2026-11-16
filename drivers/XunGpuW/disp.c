@@ -1350,6 +1350,8 @@ NTSTATUS DispCommitVidPn(PDXGKRNL_INTERFACE Dxgk, const DXGKARG_COMMITVIDPN *A)
     NTSTATUS st;
 
     if (A->Flags.PathPoweredOff) {
+        LogPrint("CommitVidPn: PathPoweredOff=1\n");
+        BlPanel(FALSE);
         return STATUS_SUCCESS;
     }
     st = Dxgk->DxgkCbQueryVidPnInterface(A->hFunctionalVidPn, DXGK_VIDPN_INTERFACE_VERSION_V1, &vi);
@@ -1381,11 +1383,15 @@ NTSTATUS DispCommitVidPn(PDXGKRNL_INTERFACE Dxgk, const DXGKARG_COMMITVIDPN *A)
                  pin ? pin->Format.Graphics.Stride : 0, pin ? pin->Format.Graphics.PixelFormat : 0, (ULONG)rot,
                  A->hPrimaryAllocation);
         if (!g_Committed) {
+            BlPanel(FALSE);
             DirectSelectLocked(NULL);
             DispScanLock();
             g_ScanCur = NULL;
             DispScanUnlock();
         } else if (A->hPrimaryAllocation != NULL) {
+            if (g_Visible) {
+                BlPanel(TRUE);
+            }
             DispScanLock();
             g_ScanCur = (TGPU_ALLOCATION *)A->hPrimaryAllocation;
             DispScanUnlock();

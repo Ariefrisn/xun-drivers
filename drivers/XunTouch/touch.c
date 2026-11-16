@@ -502,11 +502,36 @@ VOID TouchHwDeinit(PDEVICE_CONTEXT Ctx) {
 /* ---- Polling thread --------------------------------------------------------
  */
 
+static BOOLEAN IsPanelOffReg(VOID) {
+  ULONG val = 0;
+  RTL_QUERY_REGISTRY_TABLE q[2];
+  RtlZeroMemory(q, sizeof(q));
+  q[0].Flags = RTL_QUERY_REGISTRY_DIRECT;
+  q[0].Name = L"XunPanelOff";
+  q[0].EntryContext = &val;
+  q[0].DefaultType = REG_DWORD;
+  q[0].DefaultData = &val;
+  q[0].DefaultLength = sizeof(val);
+  RtlQueryRegistryValues(
+      RTL_REGISTRY_ABSOLUTE,
+      L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control", q, NULL, NULL);
+  return val != 0;
+}
+
+static VOID ClearPanelOffReg(VOID) {
+  ULONG val = 0;
+  (VOID)RtlWriteRegistryValue(
+      RTL_REGISTRY_ABSOLUTE,
+      L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control",
+      L"XunPanelOff", REG_DWORD, &val, sizeof(val));
+}
+
 static VOID TouchProcess(PDEVICE_CONTEXT Ctx, const UCHAR *Buf,
                          ULONGLONG ReadTime) {
   TOUCH_REPORT rpt;
   HID_XFER_PACKET pkt;
   ULONG i, n = 0, slots;
+  USHORT prevMask = Ctx->ActiveMask;
   USHORT mask = 0;
   UCHAR statusByte = Buf[1];
   UCHAR mode = statusByte >> 4;
@@ -595,6 +620,10 @@ static VOID TouchProcess(PDEVICE_CONTEXT Ctx, const UCHAR *Buf,
     }
   }
   Ctx->ActiveMask = mask;
+  if (prevMask == 0 && mask != 0 && IsPanelOffReg()) {
+    ClearPanelOffReg();
+    LogPrint("touch wake: cleared XunPanelOff\n");
+  }
   rpt.Count = (UCHAR)n;
   rpt.ScanTime = (USHORT)(ReadTime / 1000);
 
@@ -618,10 +647,10 @@ static VOID TouchThread(PVOID Context) {
   ULONGLONG lastChange = KeQueryInterruptTime();
   UCHAR prev[FTS_TOUCH_DATA_LEN];
 
-  period.QuadPart = -10000LL * 5;
+  period.QuadPart = -10000LL * 2;
   ExSetTimerResolution(10000, TRUE);
   RtlZeroMemory(prev, sizeof(prev));
-  LogPrint("thread started\n");
+  LogPrint("thread started (2ms active poll)\n");
 
   while (KeWaitForSingleObject(&Ctx->StopEvent, Executive, KernelMode, FALSE,
                                &period) == STATUS_TIMEOUT) {
@@ -630,10 +659,11 @@ static VOID TouchThread(PVOID Context) {
     ULONGLONG readTime;
 
     polls++;
-    if (!irqLow && !wasTouching && (polls % 20) != 0) {
+    if (!irqLow && !wasTouching && (polls % 25) != 0) {
       continue;
     }
-    if (wasTouching && KeQueryInterruptTime() - lastChange > 5000000ULL) {
+    if (wasTouching && irqLow &&
+        KeQueryInterruptTime() - lastChange > 30000000ULL) {
       UCHAR none[FTS_TOUCH_DATA_LEN];
       UCHAR id1 = 0;
       LogPrint("watchdog: contact frame unchanged 500 ms -> release & reset\n");
